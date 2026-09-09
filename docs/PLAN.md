@@ -80,9 +80,30 @@ Citação literal do guia:
 - **YGOPRODeck Collection Manager (CONFIRMADO via fórum/suporte oficial):** o importador aceita CSV com as colunas
   `Card Name, Card Quantity, Card Rarity, Card Condition, Card Edition, Card Set, Card Set Code`.
   Notas conhecidas: a coluna `cardid` de exports antigos deve ser removida; a tag `Custom_` (packs customizados) **não** é aceita pelo importador.
-- **YGOPocket (NÃO CONFIRMADO):** `ygopocket.com` é uma SPA renderizada no cliente; não há FAQ, docs, help nem listagem pública descrevendo formato de importação. Busquei o site, o domínio inteiro, fóruns e Reddit — **nenhuma especificação pública de import existe**.
+- **YGOPocket (CONFIRMADO em 2026-09-09 — exports reais fornecidos pelo usuário):** `ygopocket.com` não tem documentação pública, mas o usuário exportou a própria coleção do app e forneceu os dois arquivos (`export-samples/`). Formato verificado byte a byte:
 
-> **Decisão (respeitando "não invente um formato sem verificar"):** o exportador é construído como **plugin de perfis**. Entregamos o perfil `ygoprodeck` (verificado) e perfis genéricos `full-csv` / `txt`. O perfil `ygopocket` fica **especificado mas não implementado** até você exportar uma coleção de exemplo do próprio YGOPocket e nos dar o arquivo — aí escrevemos o adaptador em ~1h. Adicionar um perfil é uma classe nova de ~40 linhas, zero mudança arquitetural.
+  **CSV** — UTF-8 com BOM, `
+
+`, separador vírgula, 26 colunas fixas nesta ordem:
+  ```
+  card_id,card_name,quantity,set_code,rarity,art_variant,variant_label,condition,
+  language,printing_region,notes,storage_location,grading_company,grade,
+  certification_number,subgrade_centering,subgrade_corners,subgrade_edges,
+  subgrade_surface,sealed,signed,altered,source,edition,purchase_price,
+  market_value_override
+  ```
+  Exemplo real de linha: `49847524,Flame Administrator,1,SDSB-PT044,Common,,,NM,PT,pt,,,,,,,,,,false,false,false,,,,`
+
+  Achados que importam para o mapeamento:
+  - **`card_id` é o passcode do YGOPRODeck** — verificado contra o catálogo local: `49847524` = "Flame Administrator" em ambos. Isso elimina qualquer ambiguidade de identidade entre os dois sistemas.
+  - `condition` usa abreviação (`NM`), não o nome por extenso. Só temos esse exemplo confirmado; o restante do vocabulário (`LP`/`MP`/`HP`/`DMG`) é assumido por ser convenção quase universal do hobby (TCGplayer, Cardmarket, etc.), **não verificado** — sinalizado no exportador.
+  - `language`/`printing_region` são pares maiúsculo/minúsculo do mesmo código (`PT`/`pt`).
+  - Campos sem equivalente no nosso modelo (`art_variant`, `grading_*`, `subgrade_*`, `sealed`, `signed`, `altered`, `source`, `purchase_price`, `market_value_override`) saem vazios/`false` — não inventamos dado que não temos.
+  - **Achado colateral sobre a API:** o print `SDSB-PT044` (variante em português) **não existe** no nosso catálogo sincronizado — só `SDSB-EN044`. A YGOPRODeck tem parâmetro `language` documentado (`fr`,`de`,`it`,`pt`) que exige consulta **separada** por idioma; o sync padrão (Fase 2) só traz os prints que vêm na resposta default. Registrado como limitação conhecida — fora de escopo para corrigir agora.
+
+  **TXT** — uma linha por *tipo* de carta (não por cópia), formato `<quantidade> <nome>`, sem cabeçalho. Exemplo real: `1 Flame Administrator` (22 bytes, sem newline final na amostra de uma linha só).
+
+> **Decisão:** o exportador é construído como **plugin de perfis**. Perfis `ygoprodeck` e `ygopocket` — ambos verificados contra dado real — mais os genéricos `full-csv` / `txt`. Adicionar um perfil é uma classe nova, zero mudança arquitetural.
 
 ---
 
@@ -1028,9 +1049,26 @@ Blue-Eyes White Dragon
 Dark Magician
 ```
 
-### 15.5 Perfil `ygopocket` — **pendente de dados reais**
+### 15.5 Perfil `ygopocket` — **confirmado com dados reais**
 
-Como registrado na §0.4, **não existe especificação pública**. A implementação fica bloqueada por um insumo seu: exporte qualquer coleção do YGOPocket (ou envie uma captura da tela de importação) e o adaptador sai em seguida. Enquanto isso, o perfil `ygoprodeck` é a aposta mais provável de ser aceita, por ser o formato de facto do ecossistema. **Não vamos inventar um formato e chamá-lo de "ygopocket".**
+Formato verificado byte a byte contra exports reais do usuário (§0.4). Mapeamento:
+
+| Coluna YGOPocket | Origem | Observação |
+|---|---|---|
+| `card_id` | `Card.id` | é o passcode — mapeamento direto, confirmado |
+| `card_name` | `Card.name` | |
+| `quantity` | `CollectionItem.quantity` | |
+| `set_code` | `CardPrint.set_code_full` | vazio se `card_print_id IS NULL` |
+| `rarity` | `CardPrint.rarity` | vazio se sem print |
+| `condition` | `CollectionItem.condition` | mapeado para abreviação: `Near Mint`→`NM` (confirmado), `Lightly Played`→`LP`, `Moderately Played`→`MP`, `Heavily Played`→`HP`, `Damaged`→`DMG` (estes quatro por convenção do hobby, **não confirmados no export real** — só havia uma carta NM na amostra) |
+| `language` / `printing_region` | `CollectionItem.language` | maiúsculo / minúsculo do mesmo valor |
+| `notes` | `CollectionItem.notes` | |
+| `edition` | `CollectionItem.edition` | só emite `1st Edition`; `Unlimited`/`Limited` saem vazios (o único exemplo real estava vazio) |
+| `sealed`,`signed`,`altered` | — | sempre `false` (não rastreamos) |
+| demais 12 colunas | — | sempre vazias (sem equivalente no nosso modelo: `art_variant`, `variant_label`, `storage_location`, `grading_company`, `grade`, `certification_number`, `subgrade_*` ×4, `source`, `purchase_price`, `market_value_override`) |
+
+Formato de arquivo: CSV com `utf-8-sig` (grava o BOM) e `
+`, exatamente como o export real. TXT: `<quantidade> <nome>` por tipo de carta, sem cabeçalho.
 
 ---
 

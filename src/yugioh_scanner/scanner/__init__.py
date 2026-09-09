@@ -15,6 +15,7 @@ from .executor import (
     create_executor,
     resolve_workers,
 )
+from .pipeline import run_pipeline
 from .worker import ScanOutcome, ScanTask, init_worker, process_task, reset_provider, set_provider
 
 __all__ = [
@@ -34,5 +35,6 @@ __all__ = [
     "reset_provider",
     "resolve_scan_folder",
     "resolve_workers",
+    "run_pipeline",
     "set_provider",
 ]

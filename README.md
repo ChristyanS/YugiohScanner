@@ -14,7 +14,7 @@ O plano técnico completo está em [`docs/PLAN.md`](docs/PLAN.md).
 | 2 | Sincronização com a API do YGOPRODeck | ✅ |
 | 3 | Scanner + OCR | ✅ |
 | 4 | Matching | ✅ |
-| 5 | Coleção | ⬜ |
+| 5 | Coleção | ✅ |
 | 6 | CLI completa | ⬜ |
 | 7 | Exportação | ⬜ |
 | 8 | Interface Web | ⬜ |
@@ -57,13 +57,28 @@ yugioh-scanner db status       # o que existe no banco agora
 yugioh-scanner check-updates   # há catálogo novo? (1 requisição)
 yugioh-scanner sync            # atualiza só se a versão remota mudou
 yugioh-scanner sync --force    # reimporta mesmo sem mudança de versão
-yugioh-scanner scan ./cartas   # lê nome e set code das fotos (não grava ainda)
+yugioh-scanner scan ./cartas   # lê, identifica e grava na coleção (padrão)
+yugioh-scanner scan ./cartas --dry-run    # só mostra o que aconteceria
+yugioh-scanner scan ./cartas --no-auto    # nada entra sozinho; tudo vira pendente
+yugioh-scanner scan ./cartas --reprocess  # relê imagens já vistas (não reaplica)
 yugioh-scanner config show     # configuração efetiva (segredos mascarados)
 ```
 
 O `init` baixa ~14.500 cartas, ~44.500 prints e ~646 sets em cerca de 12
 segundos, respeitando metade do rate limit da API. Depois disso a aplicação é
 offline: só `sync` e o cache de imagens tocam a rede.
+
+### Idempotência do `scan`
+
+Rodar `scan` na mesma pasta duas vezes não duplica nada: cada foto é
+identificada pelo **hash do conteúdo**, não pelo caminho — renomear ou mover
+arquivos não engana o sistema. Confirmado em produção contra o catálogo real:
+
+```
+1ª execução: 5 cartas identificadas e adicionadas, 1 imagem inválida isolada
+2ª execução: 6/6 imagens puladas, coleção continua com 5 itens / 5 cópias
+--reprocess: relê as 6, decisão continua "auto", mas 0 são reaplicadas
+```
 
 ## Configuração
 

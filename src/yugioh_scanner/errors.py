@@ -135,6 +135,30 @@ class AmbiguousCardError(CollectionError):
         self.candidates = candidates
 
 
+class CollectionItemNotFoundError(CollectionError):
+    """Nenhum item de coleção com o ID pedido."""
+
+    def __init__(self, item_id: int) -> None:
+        super().__init__(f"Item de coleção #{item_id} não encontrado.")
+        self.item_id = item_id
+
+
+class PrintNotFoundForCardError(CollectionError):
+    """O set code informado não corresponde a nenhum print daquela carta.
+
+    Diferente do matching por OCR (que aceita `NULL` de bom grado quando o
+    código não valida — plano §7.2), aqui o usuário digitou o código à mão:
+    aceitar em silêncio um código que não pertence à carta esconderia um erro
+    de digitação em vez de avisar sobre ele.
+    """
+
+    def __init__(self, card_name: str, set_code: str) -> None:
+        super().__init__(
+            f"'{set_code}' não é um print conhecido de '{card_name}'.",
+            hint="Confira o código ou omita --set-code para deixar o set indefinido.",
+        )
+
+
 # -------------------------------------------------------------- exportação
 
 
