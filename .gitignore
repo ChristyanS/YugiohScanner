@@ -1,0 +1,31 @@
+# segredos
+.env
+
+# dados gerados (banco, cache de imagens, uploads, logs, backups)
+data/
+*.db
+*.db-wal
+*.db-shm
+
+# python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+build/
+dist/
+
+# ferramentas
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+coverage.xml
+
+# editores / SO
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store

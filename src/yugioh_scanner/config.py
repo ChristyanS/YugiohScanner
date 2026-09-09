@@ -1,0 +1,286 @@
+"""Configuração da aplicação — a única fonte de verdade (plano §17).
+
+Precedência: variável de ambiente > arquivo `.env` > default.
+
+Nada de `os.getenv` espalhado pelo código: todo módulo recebe `Settings` por
+injeção ou chama `get_settings()`.
+"""
+
+from __future__ import annotations
+
+import os
+from functools import lru_cache
+from pathlib import Path
+from typing import Literal
+
+from pydantic import AliasChoices, Field, SecretStr, field_validator, model_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+LogFormat = Literal["console", "json"]
+
+#: Providers que acompanham a aplicação. NÃO é um `Literal` de propósito: o
+#: registry (`ocr/registry.py`) é a fonte de verdade e aceita providers
+#: registrados em runtime. Fechar o tipo aqui criaria uma segunda lista para
+#: manter em sincronia — e adicionar um provider passaria a exigir editar a
+#: configuração, exatamente o acoplamento que o Protocol existe para evitar.
+#: A validação acontece onde o nome é usado, com erro que lista os disponíveis.
+BUILTIN_OCR_PROVIDERS = ("rapidocr", "tesseract", "paddle", "easyocr", "claude")
+
+#: Raiz do projeto (…/src/yugioh_scanner/config.py -> …/)
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+#: Teto absoluto de workers.
+MAX_WORKERS = 8
+
+#: Divisor usado no cálculo automático de workers.
+#:
+#: O plano previa `cpu_count - 1`. A medição em hardware real (i5-9400F, 6
+#: núcleos físicos, 10 cartas) mostrou que isso desperdiça processos: o OCR
+#: satura a banda de memória, não a CPU. Com 6 workers o paralelismo real é 5×,
+#: mas cada carta fica 3,5× mais lenta — o ganho líquido some.
+#:
+#:   workers=1  wall 37,2s   throughput 0,27 cartas/s
+#:   workers=2  wall 27,6s   throughput 0,36 cartas/s   <- praticamente todo o ganho
+#:   workers=4  wall 29,3s   throughput 0,34 cartas/s
+#:   workers=6  wall 25,2s   throughput 0,40 cartas/s
+#:
+#: Metade dos núcleos captura o ganho com menos memória e menos tempo de spawn.
+#: Quem quiser afinar usa `--workers` ou `YGS_OCR_WORKERS`; a Fase 9 revisita
+#: isso com o corpus de fotos reais.
+WORKER_CORE_DIVISOR = 2
+
+
+class Settings(BaseSettings):
+    """Configuração validada no boot.
+
+    Todas as variáveis usam o prefixo ``YGS_`` (ex.: ``YGS_OCR_PROVIDER``).
+    A chave da Anthropic também é lida de ``ANTHROPIC_API_KEY``, sem prefixo,
+    por ser o nome canônico que o SDK e outras ferramentas já usam.
+    """
+
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        env_prefix="YGS_",
+        # `ignore` e não `forbid`: o .env legitimamente carrega chaves sem o
+        # nosso prefixo (ANTHROPIC_API_KEY), e `forbid` as rejeitaria.
+        extra="ignore",
+        validate_default=True,
+    )
+
+    # ------------------------------------------------------------------ dados
+    data_path: Path = Path("data")
+    database_url: str | None = Field(
+        default=None,
+        description="URL SQLAlchemy. Se ausente, derivada de data_path.",
+    )
+    image_cache_path: Path | None = Field(
+        default=None,
+        description="Cache de imagens. Se ausente, data_path/images.",
+    )
+    allowed_scan_roots: list[Path] = Field(
+        default_factory=list,
+        description="Se não vazio, só pastas sob estas raízes podem ser escaneadas.",
+    )
+
+    # -------------------------------------------------------------------- ocr
+    ocr_provider: str = "rapidocr"
+    ocr_fallback_provider: str = "none"
+    ocr_workers: int | None = Field(
+        default=None, description="None = automático (cpu_count-1, teto de 8)."
+    )
+    ocr_timeout_s: int = Field(default=60, gt=0)
+    ocr_threads_per_worker: int | None = Field(
+        default=None,
+        description=(
+            "Threads que cada worker de OCR pode usar. None = automático: "
+            "todos os núcleos no modo serial, 1 dentro de um pool de processos."
+        ),
+    )
+    tesseract_cmd: Path | None = None
+
+    # -------------------------------------------------------------------- llm
+    llm_model: str = "claude-opus-5"
+    llm_api_key: SecretStr | None = Field(
+        default=None,
+        validation_alias=AliasChoices("YGS_LLM_API_KEY", "ANTHROPIC_API_KEY"),
+    )
+    llm_concurrency: int = Field(default=4, gt=0, le=32)
+    llm_use_batches: bool = False
+
+    # --------------------------------------------------------------- matching
+    confidence_auto: float = Field(default=0.93, ge=0.0, le=1.0)
+    confidence_review: float = Field(default=0.70, ge=0.0, le=1.0)
+    fuzzy_cutoff: int = Field(default=70, ge=0, le=100)
+
+    # ------------------------------------------------------------------- rede
+    ygoprodeck_base_url: str = "https://db.ygoprodeck.com/api/v7"
+    ygoprodeck_image_host: str = "images.ygoprodeck.com"
+    http_rate_limit_per_s: float = Field(
+        default=10.0,
+        gt=0,
+        description="Metade do limite deles (20/s), de propósito.",
+    )
+    http_connect_timeout_s: float = Field(default=10.0, gt=0)
+    http_read_timeout_s: float = Field(default=60.0, gt=0)
+    http_max_retries: int = Field(default=3, ge=0)
+    http_backoff_base_s: float = Field(
+        default=1.0, ge=0, description="Base do backoff exponencial entre tentativas."
+    )
+
+    # -------------------------------------------------------------------- web
+    web_host: str = "127.0.0.1"
+    web_port: int = Field(default=8000, gt=0, lt=65536)
+    max_upload_mb: int = Field(default=10, gt=0)
+    max_upload_files: int = Field(default=200, gt=0)
+    max_image_pixels: int = Field(
+        default=40_000_000, gt=0, description="Guarda contra decompression bomb."
+    )
+
+    # --------------------------------------------------------- observabilidade
+    log_level: str = "INFO"
+    log_format: LogFormat = "console"
+
+    # ------------------------------------------------------------ validadores
+
+    @field_validator("data_path", "image_cache_path", "tesseract_cmd")
+    @classmethod
+    def _resolve_path(cls, value: Path | None) -> Path | None:
+        """Resolve caminhos relativos contra a raiz do projeto, não o cwd.
+
+        Sem isso, `yugioh-scanner` rodado de outra pasta apontaria para um banco
+        diferente — o tipo de bug que só aparece em produção.
+        """
+        if value is None:
+            return None
+        return value if value.is_absolute() else (PROJECT_ROOT / value).resolve()
+
+    @field_validator("allowed_scan_roots")
+    @classmethod
+    def _resolve_roots(cls, value: list[Path]) -> list[Path]:
+        return [p.resolve() for p in value]
+
+    @field_validator("log_level")
+    @classmethod
+    def _valid_log_level(cls, value: str) -> str:
+        level = value.upper()
+        valid = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
+        if level not in valid:
+            raise ValueError(f"log_level deve ser um de {sorted(valid)}, recebido {value!r}")
+        return level
+
+    @field_validator("ocr_workers")
+    @classmethod
+    def _valid_workers(cls, value: int | None) -> int | None:
+        if value is not None and value < 1:
+            raise ValueError("ocr_workers deve ser >= 1 (ou omitido para automático)")
+        return value
+
+    @model_validator(mode="after")
+    def _check_confidence_order(self) -> Settings:
+        if self.confidence_review > self.confidence_auto:
+            raise ValueError(
+                "confidence_review não pode ser maior que confidence_auto "
+                f"({self.confidence_review} > {self.confidence_auto})"
+            )
+        return self
+
+    # -------------------------------------------------------------- derivados
+
+    @property
+    def database_path(self) -> Path:
+        """Caminho do arquivo SQLite (mesmo quando `database_url` foi dado)."""
+        if self.database_url is None:
+            return self.data_path / "yugioh.db"
+        prefix = "sqlite:///"
+        if self.database_url.startswith(prefix):
+            return Path(self.database_url[len(prefix) :]).resolve()
+        # Outro dialeto (ex.: Postgres no futuro) não tem arquivo local.
+        raise NonLocalDatabaseUrlError(self.database_url)
+
+    @property
+    def effective_database_url(self) -> str:
+        if self.database_url is not None:
+            return self.database_url
+        return f"sqlite:///{self.database_path.as_posix()}"
+
+    @property
+    def is_sqlite(self) -> bool:
+        return self.effective_database_url.startswith("sqlite")
+
+    @property
+    def images_path(self) -> Path:
+        return self.image_cache_path or (self.data_path / "images")
+
+    @property
+    def uploads_path(self) -> Path:
+        return self.data_path / "uploads"
+
+    @property
+    def logs_path(self) -> Path:
+        return self.data_path / "logs"
+
+    @property
+    def backups_path(self) -> Path:
+        return self.data_path / "backups"
+
+    @property
+    def effective_workers(self) -> int:
+        """Workers para OCR local: explícito, ou metade dos núcleos (ver acima)."""
+        if self.ocr_workers is not None:
+            return min(self.ocr_workers, MAX_WORKERS)
+        return min(MAX_WORKERS, max(1, (os.cpu_count() or 2) // WORKER_CORE_DIVISOR))
+
+    def ensure_directories(self) -> None:
+        """Cria a árvore em `data/`. Idempotente."""
+        for path in (
+            self.data_path,
+            self.images_path,
+            self.images_path / "cards",
+            self.images_path / "cards_small",
+            self.images_path / "sets",
+            self.uploads_path,
+            self.logs_path,
+            self.backups_path,
+        ):
+            path.mkdir(parents=True, exist_ok=True)
+
+    def masked_dump(self) -> dict[str, str]:
+        """Configuração efetiva com segredos mascarados, para `config show`."""
+        out: dict[str, str] = {}
+        for name in sorted(type(self).model_fields):
+            value = getattr(self, name)
+            out[name] = mask_secret(value)
+        out["effective_database_url"] = self.effective_database_url
+        out["effective_workers"] = str(self.effective_workers)
+        return out
+
+
+class NonLocalDatabaseUrlError(ValueError):
+    """`database_path` foi pedido para uma URL que não é um arquivo local."""
+
+    def __init__(self, url: str) -> None:
+        super().__init__(f"A URL {url!r} não aponta para um arquivo SQLite local.")
+
+
+def mask_secret(value: object) -> str:
+    """Mostra só o suficiente de um segredo para identificá-lo."""
+    if value is None:
+        return ""
+    if isinstance(value, SecretStr):
+        raw = value.get_secret_value()
+        if not raw:
+            return ""
+        return f"{raw[:7]}***{raw[-4:]}" if len(raw) > 14 else "***"
+    return str(value)
+
+
+@lru_cache(maxsize=1)
+def get_settings() -> Settings:
+    """Instância única, carregada uma vez por processo."""
+    return Settings()
+
+
+def reset_settings_cache() -> None:
+    """Descarta a instância em cache (usado por testes)."""
+    get_settings.cache_clear()
