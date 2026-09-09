@@ -1,0 +1,69 @@
+{
+  "data": [
+    {
+      "id": 10000000,
+      "name": "Ojama Token",
+      "type": "Token",
+      "frameType": "token",
+      "desc": "This card can be used as an Ojama Token.",
+      "race": "Beast",
+      "atk": 0,
+      "def": 1000,
+      "level": 2,
+      "attribute": "LIGHT",
+      "card_images": [
+        {
+          "id": 10000000,
+          "image_url": "https://images.ygoprodeck.com/images/cards/10000000.jpg",
+          "image_url_small": "https://images.ygoprodeck.com/images/cards_small/10000000.jpg"
+        }
+      ]
+    },
+    {
+      "id": 12345678,
+      "name": "Elemental HERO Ná​tion — Test",
+      "type": "Effect Monster",
+      "frameType": "effect",
+      "desc": "Carta sintética para exercitar acentos e travessão no nome.",
+      "race": "Warrior",
+      "atk": 1800,
+      "def": 1000,
+      "level": 4,
+      "attribute": "LIGHT",
+      "card_sets": [
+        {
+          "set_name": "25th Anniversary Tin: Dueling Mirrors",
+          "set_code": "MP24-EN999",
+          "set_rarity": "Common",
+          "set_rarity_code": "(C)",
+          "set_price": ""
+        },
+        {
+          "set_name": "Milênio Promo",
+          "set_code": "MVP1-ENV04",
+          "set_rarity": "Ultra Rare",
+          "set_rarity_code": "(UR)",
+          "set_price": "3.25"
+        }
+      ],
+      "card_images": [
+        {
+          "id": 12345678,
+          "image_url": "https://images.ygoprodeck.com/images/cards/12345678.jpg",
+          "image_url_small": "https://images.ygoprodeck.com/images/cards_small/12345678.jpg"
+        }
+      ],
+      "misc_info": [{ "tcg_date": "", "konami_id": 99999, "has_effect": 1 }]
+    }
+  ],
+  "meta": {
+    "generated": "2026-09-09T16:57:17+00:00",
+    "current_rows": 2,
+    "total_rows": 5,
+    "rows_remaining": 0,
+    "total_pages": 2,
+    "pages_remaining": 0,
+    "next_page": "",
+    "next_page_offset": 5
+  }
+}
