@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block title %}{{ card.name }} — Yu-Gi-Oh! Scanner{% endblock %}
+{% block content %}
+<a href="/collection">&larr; coleção</a>
+<div class="grid">
+  <div>
+    <img src="/api/v1/cards/{{ card.id }}/image?size=full" alt="{{ card.name }}" style="max-width: 300px;">
+  </div>
+  <div>
+    <h1>{{ card.name }}</h1>
+    <p><strong>Tipo:</strong> {{ card.type }}{% if card.attribute %} &middot; <strong>Atributo:</strong> {{ card.attribute }}{% endif %}</p>
+    {% if card.atk is not none %}<p><strong>ATK/DEF:</strong> {{ card.atk }}/{{ card.def }}{% if card.level %} &middot; <strong>Nível:</strong> {{ card.level }}{% endif %}</p>{% endif %}
+    {% if card.archetype %}<p><strong>Arquétipo:</strong> {{ card.archetype }}</p>{% endif %}
+    <p>{{ card.desc }}</p>
+    <p><strong>Você possui: {{ total_owned }} cópia(s)</strong></p>
+  </div>
+</div>
+
+<h2>Prints conhecidos</h2>
+<figure>
+<table>
+  <thead><tr><th>Set</th><th>Nome do set</th><th>Raridade</th><th>Possui</th></tr></thead>
+  <tbody>
+    {% for p in prints %}
+    <tr>
+      <td>{{ p.set_code_full }}</td>
+      <td>{{ p.set_name }}</td>
+      <td>{{ p.rarity or "—" }}</td>
+      <td>{{ "✓" if p.id in owned_print_ids else "" }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+</figure>
+
+{% if owned %}
+<h2>Suas cópias</h2>
+<figure>
+<table>
+  <thead><tr><th>Set</th><th>Condição</th><th>Qtd</th><th>Origem</th></tr></thead>
+  <tbody>
+    {% for item in owned %}
+    <tr>
+      <td>{{ item.card_print.set_code_full if item.card_print else "indefinido" }}</td>
+      <td>{{ item.condition }}</td>
+      <td>{{ item.quantity }}</td>
+      <td>{{ item.source }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+</figure>
+{% endif %}
+{% endblock %}

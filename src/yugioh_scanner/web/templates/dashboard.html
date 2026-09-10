@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+{% block title %}Dashboard — Yu-Gi-Oh! Scanner{% endblock %}
+{% block content %}
+<h1>Dashboard</h1>
+
+<div class="metric-grid">
+  <article class="metric-card">
+    <span class="value">{{ stats.distinct_cards }}</span>
+    <span class="label">cartas distintas</span>
+  </article>
+  <article class="metric-card">
+    <span class="value">{{ stats.total_copies }}</span>
+    <span class="label">total de cópias</span>
+  </article>
+  <article class="metric-card">
+    <span class="value">{{ stats.sets_represented }}</span>
+    <span class="label">sets representados</span>
+  </article>
+  <article class="metric-card">
+    <a href="/collection?no_set=1"><span class="value">{{ stats.items_without_print }}</span></a>
+    <span class="label">sem set definido</span>
+  </article>
+  <article class="metric-card">
+    <a href="/review"><span class="value">{{ pending_count }}</span></a>
+    <span class="label">pendências de revisão</span>
+  </article>
+</div>
+
+<h2>Últimos scans</h2>
+{% if jobs %}
+<figure>
+<table>
+  <thead>
+    <tr><th>ID</th><th>Pasta</th><th>Status</th><th>Processadas</th><th>Auto</th><th>Pendentes</th><th>Falhas</th><th>Início</th></tr>
+  </thead>
+  <tbody>
+    {% for job in jobs %}
+    <tr>
+      <td><a href="/scan/{{ job.id }}">#{{ job.id }}</a></td>
+      <td>{{ job.folder_path }}</td>
+      <td>{{ job.status }}</td>
+      <td>{{ job.processed }}</td>
+      <td>{{ job.auto_added }}</td>
+      <td>{{ job.pending }}</td>
+      <td>{{ job.failed }}</td>
+      <td>{{ job.started_at[:16] }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+</figure>
+{% else %}
+<p><em>Nenhum scan executado ainda. <a href="/scan">Comece por aqui</a>.</em></p>
+{% endif %}
+
+<h2>Adições recentes</h2>
+{% if recent_items %}
+<figure>
+<table>
+  <thead><tr><th>Carta</th><th>Set</th><th>Qtd</th><th>Origem</th><th>Quando</th></tr></thead>
+  <tbody>
+    {% for item in recent_items %}
+    <tr>
+      <td><a href="/cards/{{ item.card_id }}">{{ item.card.name }}</a></td>
+      <td>{{ item.card_print.set_code_full if item.card_print else "—" }}</td>
+      <td>{{ item.quantity }}</td>
+      <td>{{ item.source }}</td>
+      <td>{{ item.added_at.strftime("%Y-%m-%d %H:%M") }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+</figure>
+{% else %}
+<p><em>Coleção vazia.</em></p>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,8 @@
+<select hx-post="/collection/{{ item.id }}/set-print"
+        hx-target="#item-{{ item.id }}" hx-swap="outerHTML"
+        name="card_print_id" hx-trigger="change">
+  <option value="">escolha um set...</option>
+  {% for p in prints %}
+  <option value="{{ p.id }}">{{ p.set_code_full }} — {{ p.rarity or "?" }}</option>
+  {% endfor %}
+</select>

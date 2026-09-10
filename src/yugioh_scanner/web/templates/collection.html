@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block title %}Coleção — Yu-Gi-Oh! Scanner{% endblock %}
+{% block content %}
+<h1>Coleção</h1>
+
+<form id="filters" hx-get="/collection/rows" hx-target="#results" hx-trigger="submit, keyup changed delay:300ms from:#search, change from:.filter">
+  <div class="grid">
+    <input type="search" id="search" name="search" placeholder="Buscar por nome..." value="{{ filters.search or '' }}">
+    <input type="text" name="set" class="filter" placeholder="Set (ex.: LOB)" value="{{ filters.set_prefix or '' }}">
+    <label><input type="checkbox" name="no_set" class="filter" value="1" {% if filters.no_set %}checked{% endif %}> Só sem set</label>
+  </div>
+  <div class="grid">
+    <select name="sort" class="filter">
+      <option value="name" {% if filters.sort == "name" %}selected{% endif %}>Nome</option>
+      <option value="quantity" {% if filters.sort == "quantity" %}selected{% endif %}>Quantidade</option>
+      <option value="added" {% if filters.sort == "added" %}selected{% endif %}>Adicionado em</option>
+      <option value="set" {% if filters.sort == "set" %}selected{% endif %}>Set</option>
+    </select>
+    <label><input type="checkbox" name="desc" class="filter" value="1" {% if filters.descending %}checked{% endif %}> Decrescente</label>
+  </div>
+</form>
+
+<details>
+  <summary>Exportar</summary>
+  <form action="/api/v1/export" method="get">
+    <div class="grid">
+      <select name="profile">
+        {% for fmt, name in export_profiles %}
+        <option value="{{ name }}">{{ name }}</option>
+        {% endfor %}
+      </select>
+      <input type="hidden" name="format" value="csv">
+      <button type="submit">Baixar CSV</button>
+    </div>
+  </form>
+</details>
+
+<div id="results">
+  {% include "partials/collection_rows.html" %}
+</div>
+{% endblock %}

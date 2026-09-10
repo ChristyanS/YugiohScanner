@@ -1,0 +1,35 @@
+<tr id="item-{{ item.id }}">
+  <td><img class="thumb" src="/api/v1/cards/{{ item.card_id }}/image?size=small" loading="lazy" alt=""></td>
+  <td><a href="/cards/{{ item.card_id }}">{{ item.card.name }}</a></td>
+  <td>
+    {% if item.card_print %}
+      {{ item.card_print.set_code_full }}
+    {% else %}
+      <span id="set-cell-{{ item.id }}"
+            hx-get="/collection/{{ item.id }}/print-options"
+            hx-trigger="click once"
+            hx-target="this"
+            hx-swap="innerHTML"
+            style="cursor:pointer; text-decoration: underline;">
+        (definir set)
+      </span>
+    {% endif %}
+  </td>
+  <td>{{ item.card_print.rarity if item.card_print else "" }}</td>
+  <td>
+    <button class="outline"
+            hx-post="/collection/{{ item.id }}/quantity?delta=-1"
+            hx-target="#item-{{ item.id }}" hx-swap="outerHTML">-</button>
+    {{ item.quantity }}
+    <button class="outline"
+            hx-post="/collection/{{ item.id }}/quantity?delta=1"
+            hx-target="#item-{{ item.id }}" hx-swap="outerHTML">+</button>
+  </td>
+  <td>{{ item.source }}</td>
+  <td>
+    <button class="contrast outline"
+            hx-delete="/collection/{{ item.id }}"
+            hx-confirm="Remover {{ item.card.name }} da coleção?"
+            hx-target="#item-{{ item.id }}" hx-swap="outerHTML">remover</button>
+  </td>
+</tr>

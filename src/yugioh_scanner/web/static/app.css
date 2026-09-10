@@ -1,0 +1,111 @@
+/* Ajustes pontuais sobre o Pico.css — o resto vem do tema padrão dele. */
+
+.error-box {
+  background: color-mix(in srgb, var(--pico-del-color) 12%, transparent);
+  border: 1px solid var(--pico-del-color);
+  border-radius: var(--pico-border-radius);
+  padding: 0.75rem 1rem;
+  margin-block: 0.5rem;
+}
+
+.metric-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+  gap: 1rem;
+  margin-block-end: 1.5rem;
+}
+
+.metric-card {
+  text-align: center;
+  padding: 1rem;
+}
+
+.metric-card .value {
+  font-size: 2rem;
+  font-weight: 700;
+  display: block;
+}
+
+.metric-card .label {
+  color: var(--pico-muted-color);
+  font-size: 0.85rem;
+}
+
+.badge {
+  display: inline-block;
+  padding: 0.1rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.badge-auto { background: color-mix(in srgb, var(--pico-ins-color) 20%, transparent); }
+.badge-pending, .badge-manual { background: color-mix(in srgb, #d9a441 25%, transparent); }
+.badge-unmatched, .badge-rejected { background: color-mix(in srgb, var(--pico-del-color) 20%, transparent); }
+.badge-confirmed { background: color-mix(in srgb, var(--pico-ins-color) 20%, transparent); }
+
+.thumb {
+  width: 48px;
+  height: 68px;
+  object-fit: cover;
+  border-radius: 4px;
+  background: var(--pico-card-sectioning-background-color);
+}
+
+.review-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1.5rem;
+}
+
+.review-grid img.roi {
+  max-width: 100%;
+  border: 1px solid var(--pico-muted-border-color);
+  margin-block-end: 0.5rem;
+}
+
+.candidate-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.candidate-list li {
+  padding: 0.5rem;
+  border: 1px solid var(--pico-muted-border-color);
+  border-radius: var(--pico-border-radius);
+  margin-block-end: 0.5rem;
+  cursor: pointer;
+}
+
+.candidate-list li.selected {
+  border-color: var(--pico-primary);
+  background: color-mix(in srgb, var(--pico-primary) 8%, transparent);
+}
+
+.kbd-hint {
+  color: var(--pico-muted-color);
+  font-size: 0.85rem;
+}
+
+.scan-log {
+  max-height: 320px;
+  overflow-y: auto;
+  font-family: var(--pico-font-family-monospace, monospace);
+  font-size: 0.85rem;
+}
+
+.upload-drop {
+  border: 2px dashed var(--pico-muted-border-color);
+  border-radius: var(--pico-border-radius);
+  padding: 2rem;
+  text-align: center;
+  color: var(--pico-muted-color);
+}
+
+.upload-drop.dragover {
+  border-color: var(--pico-primary);
+  color: var(--pico-primary);
+}
+
+progress { width: 100%; }

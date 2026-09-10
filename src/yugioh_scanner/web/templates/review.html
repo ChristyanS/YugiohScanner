@@ -1,0 +1,172 @@
+{% extends "base.html" %}
+{% block title %}Revisão — Yu-Gi-Oh! Scanner{% endblock %}
+{% block content %}
+<h1>Revisão</h1>
+<p class="kbd-hint"><kbd>1</kbd>-<kbd>5</kbd> escolhe candidato &middot; <kbd>Enter</kbd> confirma &middot; <kbd>S</kbd> pula &middot; <kbd>X</kbd> rejeita &middot; <kbd>&rarr;</kbd> próxima</p>
+
+<div id="empty-state" hidden><p><em>Nada pendente. 🎉</em></p></div>
+<p id="counter"></p>
+
+<div id="review-body" class="review-grid" hidden>
+  <div>
+    <img id="photo" class="roi" alt="Foto original">
+    <p><strong>OCR — nome:</strong> <span id="ocr-name"></span></p>
+    <p><strong>OCR — código:</strong> <span id="ocr-code"></span></p>
+  </div>
+  <div>
+    <h3>Candidatos</h3>
+    <ul id="candidates" class="candidate-list"></ul>
+
+    <div id="print-section" hidden>
+      <label>Set
+        <select id="print-select"></select>
+      </label>
+    </div>
+
+    <label>Quantidade
+      <input type="number" id="quantity" value="1" min="1">
+    </label>
+
+    <div class="grid">
+      <button id="btn-confirm">Confirmar (Enter)</button>
+      <button id="btn-skip" class="secondary">Pular (S)</button>
+      <button id="btn-reject" class="contrast outline">Rejeitar (X)</button>
+    </div>
+    <div id="review-error"></div>
+  </div>
+</div>
+
+<script>
+let queue = [];
+let index = 0;
+let selectedCandidate = null;
+let selectedPrint = null;
+
+const counter = document.getElementById("counter");
+const emptyState = document.getElementById("empty-state");
+const body = document.getElementById("review-body");
+const photo = document.getElementById("photo");
+const ocrName = document.getElementById("ocr-name");
+const ocrCode = document.getElementById("ocr-code");
+const candidatesEl = document.getElementById("candidates");
+const printSection = document.getElementById("print-section");
+const printSelect = document.getElementById("print-select");
+const quantityInput = document.getElementById("quantity");
+const errorBox = document.getElementById("review-error");
+
+function showError(message) {
+  errorBox.innerHTML = message ? `<div class="error-box">${message}</div>` : "";
+}
+
+async function loadQueue() {
+  const res = await fetch("/api/v1/scan-results?decision=pending&limit=200");
+  queue = await res.json();
+  index = 0;
+  render();
+}
+
+function current() { return queue[index]; }
+
+function render() {
+  showError("");
+  if (!queue.length) {
+    emptyState.hidden = false;
+    body.hidden = true;
+    counter.textContent = "";
+    return;
+  }
+  emptyState.hidden = true;
+  body.hidden = false;
+  counter.textContent = `${index + 1} de ${queue.length}`;
+
+  const r = current();
+  photo.src = `/api/v1/scan-images/${r.image.id}/file`;
+  ocrName.textContent = r.ocr_name_raw || "(vazio)";
+  ocrCode.textContent = r.ocr_code_raw || "(vazio)";
+  quantityInput.value = 1;
+  selectedCandidate = null;
+  selectedPrint = null;
+  printSection.hidden = true;
+  printSelect.innerHTML = "";
+
+  candidatesEl.innerHTML = "";
+  (r.candidates || []).slice(0, 5).forEach((c, i) => {
+    const li = document.createElement("li");
+    li.dataset.index = i;
+    li.innerHTML = `<img class="thumb" src="/api/v1/cards/${c.card_id}/image?size=small" loading="lazy" alt="">
+      <strong>${i + 1}. ${c.name}</strong> — ${(c.score * 100).toFixed(0)}%`;
+    li.addEventListener("click", () => selectCandidate(i));
+    candidatesEl.appendChild(li);
+  });
+  if (r.candidates && r.candidates.length) selectCandidate(0);
+}
+
+async function selectCandidate(i) {
+  const r = current();
+  const c = (r.candidates || [])[i];
+  if (!c) return;
+  selectedCandidate = c;
+  [...candidatesEl.children].forEach((li, idx) => li.classList.toggle("selected", idx === i));
+
+  const res = await fetch(`/api/v1/cards/${c.card_id}`);
+  const card = await res.json();
+  printSelect.innerHTML = '<option value="">(set indefinido)</option>' +
+    card.prints.map(p => `<option value="${p.id}">${p.set_code} — ${p.rarity || "?"}</option>`).join("");
+  printSection.hidden = false;
+  printSelect.value = "";
+  selectedPrint = null;
+  printSelect.onchange = () => { selectedPrint = printSelect.value || null; };
+}
+
+async function confirmCurrent() {
+  const r = current();
+  if (!r || !selectedCandidate) { showError("Escolha um candidato."); return; }
+  const res = await fetch(`/api/v1/scan-results/${r.id}/confirm`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      card_id: selectedCandidate.card_id,
+      card_print_id: selectedPrint ? parseInt(selectedPrint, 10) : null,
+      quantity: parseInt(quantityInput.value, 10) || 1,
+    }),
+  });
+  const payload = await res.json();
+  if (!res.ok) { showError(payload.error || "Falha ao confirmar"); return; }
+  advance();
+}
+
+async function rejectCurrent() {
+  const r = current();
+  if (!r) return;
+  const res = await fetch(`/api/v1/scan-results/${r.id}/reject`, { method: "POST" });
+  if (!res.ok) { const payload = await res.json(); showError(payload.error || "Falha ao rejeitar"); return; }
+  advance();
+}
+
+function skipCurrent() { index = Math.min(index + 1, queue.length); render(); }
+
+function advance() {
+  queue.splice(index, 1);
+  if (index >= queue.length) index = Math.max(0, queue.length - 1);
+  render();
+}
+
+document.getElementById("btn-confirm").addEventListener("click", confirmCurrent);
+document.getElementById("btn-skip").addEventListener("click", skipCurrent);
+document.getElementById("btn-reject").addEventListener("click", rejectCurrent);
+
+document.addEventListener("keydown", (e) => {
+  if (body.hidden) return;
+  if (e.target.tagName === "SELECT" || e.target.tagName === "INPUT") {
+    if (e.key !== "Enter") return;
+  }
+  if (e.key >= "1" && e.key <= "5") { selectCandidate(parseInt(e.key, 10) - 1); e.preventDefault(); }
+  else if (e.key === "Enter") { confirmCurrent(); e.preventDefault(); }
+  else if (e.key.toLowerCase() === "s") { skipCurrent(); e.preventDefault(); }
+  else if (e.key.toLowerCase() === "x") { rejectCurrent(); e.preventDefault(); }
+  else if (e.key === "ArrowRight") { skipCurrent(); e.preventDefault(); }
+});
+
+loadQueue();
+</script>
+{% endblock %}

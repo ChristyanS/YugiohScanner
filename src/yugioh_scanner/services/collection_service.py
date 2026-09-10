@@ -37,12 +37,14 @@ class CollectionStats:
     distinct_cards: int
     total_copies: int
     items_without_print: int
+    sets_represented: int = 0
 
     def as_dict(self) -> dict[str, int]:
         return {
             "distinct_cards": self.distinct_cards,
             "total_copies": self.total_copies,
             "items_without_print": self.items_without_print,
+            "sets_represented": self.sets_represented,
         }
 
 
@@ -55,10 +57,16 @@ class CollectionService:
 
     def stats(self) -> CollectionStats:
         items = self.repo.list_all()
+        sets = {
+            item.card_print.set_prefix
+            for item in items
+            if item.card_print is not None and item.card_print.set_prefix is not None
+        }
         return CollectionStats(
             distinct_cards=len({item.card_id for item in items}),
             total_copies=sum(item.quantity for item in items),
             items_without_print=sum(1 for item in items if item.card_print_id is None),
+            sets_represented=len(sets),
         )
 
     def list_items(
@@ -129,6 +137,9 @@ class CollectionService:
 
     def set_print(self, item_id: int, card_print_id: int) -> CollectionItem:
         return self.repo.set_print(item_id, card_print_id)
+
+    def set_notes(self, item_id: int, notes: str | None) -> CollectionItem:
+        return self.repo.set_notes(item_id, notes)
 
     def resolve_print_by_code(self, item_id: int, set_code: str) -> CollectionItem:
         """Resolve manualmente o set de um item (plano §11.4: `collection set-print`).

@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}Scan #{{ job.id }} — Yu-Gi-Oh! Scanner{% endblock %}
+{% block content %}
+<h1>Scan #{{ job.id }}</h1>
+<p><a href="/scan">&larr; novo scan</a></p>
+
+<div class="metric-grid">
+  <article class="metric-card"><span class="value">{{ job.processed }}</span><span class="label">processadas</span></article>
+  <article class="metric-card"><span class="value">{{ job.auto_added }}</span><span class="label">auto</span></article>
+  <article class="metric-card"><span class="value">{{ job.pending }}</span><span class="label">pendentes</span></article>
+  <article class="metric-card"><span class="value">{{ job.failed }}</span><span class="label">falhas</span></article>
+  <article class="metric-card"><span class="value">{{ job.skipped }}</span><span class="label">puladas</span></article>
+</div>
+
+<p><strong>Pasta:</strong> {{ job.folder_path }} &middot; <strong>Provider:</strong> {{ job.ocr_provider }} &middot; <strong>Status:</strong> {{ job.status }}</p>
+
+<figure>
+<table>
+  <thead><tr><th>Texto OCR</th><th>Código</th><th>Decisão</th><th>Confiança</th><th>Aplicado</th></tr></thead>
+  <tbody>
+    {% for r in results %}
+    <tr>
+      <td>{{ r.ocr_name_raw or "—" }}</td>
+      <td>{{ r.ocr_code_raw or "—" }}</td>
+      <td><span class="badge badge-{{ r.decision }}">{{ r.decision }}</span></td>
+      <td>{{ "%.0f"|format(r.confidence * 100) }}%</td>
+      <td>{{ "sim" if r.applied else "não" }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+</figure>
+{% if job.pending > 0 %}
+<p><a href="/review" role="button">Revisar pendências</a></p>
+{% endif %}
+{% endblock %}

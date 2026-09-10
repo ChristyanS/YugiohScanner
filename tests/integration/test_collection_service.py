@@ -97,6 +97,7 @@ class TestStats:
         assert stats.distinct_cards == 2
         assert stats.total_copies == 3
         assert stats.items_without_print == 1
+        assert stats.sets_represented == 1
 
     def test_empty_collection(self, service: CollectionService) -> None:
         stats = service.stats()
@@ -104,6 +105,7 @@ class TestStats:
             "distinct_cards": 0,
             "total_copies": 0,
             "items_without_print": 0,
+            "sets_represented": 0,
         }
 
 

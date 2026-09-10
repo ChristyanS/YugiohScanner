@@ -1,0 +1,12 @@
+<table>
+  <thead>
+    <tr><th></th><th>Carta</th><th>Set</th><th>Raridade</th><th>Qtd</th><th>Origem</th><th></th></tr>
+  </thead>
+  <tbody id="collection-rows">
+    {% for item in items %}
+    {% include "partials/collection_row.html" %}
+    {% else %}
+    <tr><td colspan="7"><em>Nenhum item bate com o filtro.</em></td></tr>
+    {% endfor %}
+  </tbody>
+</table>

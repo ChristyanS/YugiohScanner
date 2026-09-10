@@ -1,5 +1,6 @@
 """Preparação de imagens e cache local das artes do catálogo."""
 
+from .cache import ImageCache, ImageNotAvailableError, ImageSize
 from .preprocess import (
     CODE_ROI,
     MAX_DIMENSION,
@@ -23,7 +24,10 @@ __all__ = [
     "NAME_ROI",
     "SUPPORTED_EXTENSIONS",
     "BoundingBox",
+    "ImageCache",
     "ImageError",
+    "ImageNotAvailableError",
+    "ImageSize",
     "PreparedImage",
     "detect_card_bounds",
     "downscale",

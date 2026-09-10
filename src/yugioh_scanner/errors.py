@@ -139,6 +139,14 @@ class JobNotFoundError(ScanError):
         self.job_id = job_id
 
 
+class ScanImageNotFoundError(ScanError):
+    """Nenhuma imagem de scan com o ID pedido."""
+
+    def __init__(self, image_id: int) -> None:
+        super().__init__(f"Imagem de scan #{image_id} não encontrada.")
+        self.image_id = image_id
+
+
 # ---------------------------------------------------------------- coleção
 
 
@@ -198,4 +206,27 @@ class UnknownExportProfileError(ExportError):
         super().__init__(
             f"Perfil de exportação desconhecido: '{profile}'.",
             hint=f"Disponíveis: {', '.join(available)}",
+        )
+
+
+# ------------------------------------------------------------------------ web
+
+
+class UploadError(YugiohScannerError):
+    """Falha ao receber arquivos enviados pelo navegador (plano §21)."""
+
+
+class TooManyUploadFilesError(UploadError):
+    def __init__(self, count: int, limit: int) -> None:
+        super().__init__(
+            f"{count} arquivos enviados, o limite é {limit} por envio.",
+            hint="Envie em lotes menores.",
+        )
+
+
+class UploadTooLargeError(UploadError):
+    def __init__(self, limit_mb: int) -> None:
+        super().__init__(
+            f"Um dos arquivos passa do limite de {limit_mb} MB.",
+            hint="Redimensione a foto ou envie em resolução menor.",
         )

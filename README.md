@@ -17,7 +17,7 @@ O plano técnico completo está em [`docs/PLAN.md`](docs/PLAN.md).
 | 5 | Coleção | ✅ |
 | 6 | CLI completa | ✅ |
 | 7 | Exportação | ✅ |
-| 8 | Interface Web | ⬜ |
+| 8 | Interface Web | ✅ |
 | 9 | Calibração e performance | ⬜ |
 | 10 | Fallback por LLM Vision (opcional) | ⬜ |
 | 11 | Empacotamento e documentação | ⬜ |
@@ -34,8 +34,12 @@ python -m venv .venv
 .venv\Scripts\activate          # Windows
 # source .venv/bin/activate     # Linux/macOS
 
-pip install -e ".[ocr,dev]"
+pip install -e ".[ocr,web,dev]"
 ```
+
+`web` é necessário para rodar a suíte completa de testes (Fase 8 usa
+`TestClient` do FastAPI nos testes de integração), não só para subir o
+servidor.
 
 Extras disponíveis:
 
@@ -78,11 +82,30 @@ yugioh-scanner export --format csv                           # perfil padrão (y
 yugioh-scanner export --format csv --profile ygopocket -o coleção.csv
 yugioh-scanner export --format txt --profile deck            # uma linha por cópia
 yugioh-scanner export --format csv --profile full -o backup.csv --skip-unresolved
+
+yugioh-scanner web                          # http://127.0.0.1:8000
+yugioh-scanner web --port 8080 --reload     # dev: recarrega ao editar código
 ```
 
 O `init` baixa ~14.500 cartas, ~44.500 prints e ~646 sets em cerca de 12
 segundos, respeitando metade do rate limit da API. Depois disso a aplicação é
 offline: só `sync` e o cache de imagens tocam a rede.
+
+### Interface Web
+
+Cinco telas (plano §10): dashboard (`/`), scanner com progresso ao vivo via
+SSE e upload por drag-and-drop (`/scan`), revisão com atalhos de teclado
+`1`-`5`/`Enter`/`S`/`X` (`/review`), coleção com filtro incremental e edição
+inline (`/collection`) e detalhe de carta (`/cards/{id}`). FastAPI serve HTML
+(Jinja2 + HTMX, sem build step — HTMX e Pico.css vendorizados em
+`web/static/vendor/`, nada de CDN) e JSON (`/api/v1/*`) pelos **mesmos
+serviços** da CLI. Bind em `127.0.0.1` por padrão; sem autenticação (plano
+§21) — não exponha em `0.0.0.0` sem entender essa limitação.
+
+Imagens de carta são cacheadas sob demanda em `data/images/` e servidas
+localmente (`/api/v1/cards/{id}/image`) — nunca hotlink direto ao YGOPRODeck
+(plano §0.2, §14.1). Verificado: com o cache quente, uma segunda requisição
+pela mesma imagem não toca a rede.
 
 ### Idempotência do `scan`
 

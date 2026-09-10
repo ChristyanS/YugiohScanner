@@ -282,5 +282,6 @@ def stats_cmd(
                 "cartas diferentes": stats.distinct_cards,
                 "cópias totais": stats.total_copies,
                 "sem set identificado": stats.items_without_print,
+                "sets representados": stats.sets_represented,
             },
         )

@@ -30,11 +30,17 @@ from ..db.tables import (
     DEFAULT_EDITION,
     DEFAULT_LANGUAGE,
     CollectionItem,
+    ScanImage,
     ScanJob,
     ScanResult,
 )
 from ..domain.confidence import Decision
-from ..errors import JobNotFoundError, ScanResultAlreadyAppliedError, ScanResultNotFoundError
+from ..errors import (
+    JobNotFoundError,
+    ScanImageNotFoundError,
+    ScanResultAlreadyAppliedError,
+    ScanResultNotFoundError,
+)
 from ..logging_setup import get_logger, log_context
 from ..matching.candidates import NameIndex
 from ..matching.engine import MatchingEngine, MatchResult
@@ -234,6 +240,26 @@ class ScanService:
                 _ = result.scan_image.file_path
             return results
 
+    def get_image_path(self, scan_image_id: int) -> Path:
+        """Caminho no disco da foto original (Fase 8: `/review` mostra a
+        foto ao lado da leitura — nunca aceita caminho vindo do cliente, só
+        o ID, resolvido aqui contra o que o próprio scan gravou (plano §21)."""
+        with self.database.session() as session:
+            image = session.get(ScanImage, scan_image_id)
+            if image is None:
+                raise ScanImageNotFoundError(scan_image_id)
+            return Path(image.file_path)
+
+    def get_result(self, result_id: int) -> ScanResult:
+        """Detalhe de uma leitura (Fase 8: `GET /api/v1/scan-results/{id}`)."""
+        with self.database.session() as session:
+            result = ScanRepository(session).get_result(result_id)
+            if result is None:
+                raise ScanResultNotFoundError(result_id)
+            _ = result.scan_image.file_path
+            session.expunge(result)
+            return result
+
     def confirm_result(
         self,
         result_id: int,
@@ -313,6 +339,17 @@ class ScanService:
                 raise JobNotFoundError(job_id)
             session.expunge(job)
             return job
+
+    def job_results(self, job_id: int) -> list[ScanResult]:
+        """Os resultados de um job (Fase 8: `GET /scan/{id}` e `/api/v1/scans/{id}/results`)."""
+        with self.database.session() as session:
+            if ScanRepository(session).get_job(job_id) is None:
+                raise JobNotFoundError(job_id)
+            results = ScanRepository(session).results_for_job(job_id)
+            for result in results:
+                _ = result.scan_image.file_path
+            session.expunge_all()
+            return results
 
     # ---------------------------------------------------------------- internos
 

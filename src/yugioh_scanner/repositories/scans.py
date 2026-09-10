@@ -78,6 +78,20 @@ class ScanRepository:
     def get_job(self, job_id: int) -> ScanJob | None:
         return self.session.get(ScanJob, job_id)
 
+    def results_for_job(self, job_id: int) -> list[ScanResult]:
+        """Todos os resultados de um job — a grade de `/scan/{id}` (Fase 8).
+
+        Junta em vez de percorrer `job.images` (que é `lazy="select"`, uma
+        consulta por imagem): uma consulta só, já na forma que a tela usa.
+        """
+        stmt = (
+            select(ScanResult)
+            .join(ScanImage, ScanResult.scan_image_id == ScanImage.id)
+            .where(ScanImage.job_id == job_id)
+            .order_by(ScanResult.id)
+        )
+        return list(self.session.scalars(stmt))
+
     def recent_jobs(self, limit: int = 10) -> list[ScanJob]:
         # `id` como desempate: dois jobs criados na mesma janela de resolução
         # do timestamp (comum em testes, e possível em uso real com CLI/Web

@@ -747,7 +747,45 @@ FastAPI serve **duas superfícies na mesma app**: rotas HTML (HTMX) e `/api/v1/*
 | `GET` | `/api/v1/export?format=csv&profile=ygoprodeck` | Download do arquivo. |
 | `POST` | `/api/v1/uploads` | Upload de fotos pelo navegador (limites em §15). |
 
-Rotas HTML: `/`, `/scan`, `/scan/{id}`, `/review`, `/collection`, `/collection/{id}`, `/cards/{id}`, `/settings`.
+Rotas HTML: `/`, `/scan`, `/scan/{id}`, `/review`, `/collection`, `/cards/{id}`.
+
+> **Desvios implementados (Fase 8):**
+>
+> 1. **Progresso ao vivo usa `run_id`, não `job_id`.** O plano previa `GET
+>    /api/v1/scans/{id}/events` e `DELETE /api/v1/scans/{id}` com o mesmo `id`
+>    do histórico persistido. Mas `ScanService._run()` só cria o `ScanJob`
+>    depois de descobrir e filtrar imagens por hash (pode não sobrar trabalho
+>    nenhum) — expor isso de forma síncrona ao POST exigiria reordenar esse
+>    fluxo, tocando código já testado da Fase 5 por um ganho pequeno. Em vez
+>    disso: `POST /api/v1/scans` inicia o scan numa thread e devolve um
+>    `run_id` (UUID) na hora; `GET /api/v1/scans/live/{run_id}/events` (SSE) e
+>    `DELETE /api/v1/scans/live/{run_id}` (cancela) usam esse token. O
+>    `job_id` de verdade chega dentro do evento final (`type="done"`) assim
+>    que `ScanService.scan()` retorna, e a partir daí `GET /api/v1/scans/{id}`
+>    (numérico) funciona exatamente como descrito.
+> 2. **Sem recortes de ROI na revisão.** §10.3 pede os recortes de nome/código
+>    ao lado da foto. Essas regiões só existem como `PIL.Image` efêmeros
+>    dentro de `images/preprocess.py` durante o OCR — nunca persistidos em
+>    disco. Persisti-las exigiria mudar o pipeline de scan para gravá-las por
+>    imagem, fora do escopo desta fase. A revisão mostra a foto original
+>    inteira (`GET /api/v1/scan-images/{id}/file`, endpoint novo — não estava
+>    no plano original) via `<img>`; o zoom por CSS supre parte da falta.
+> 3. **`PATCH /api/v1/collection/{id}` cobre só `quantity`, `set_code` e
+>    `notes`.** `condition`/`edition`/`language` fazem parte da chave lógica
+>    do item (`ux_collection`, plano §4.3) — mudar um exigiria decidir como
+>    fundir com uma linha que já exista na chave nova, uma decisão de UX que
+>    §10.4 não pede (a tela só edita quantidade inline e resolve set
+>    indefinido). Não implementado até a tela realmente precisar.
+> 4. **`/collection/{id}` e `/settings` não foram construídas.** São rotas
+>    HTML listadas na tabela original, mas nenhuma das cinco telas descritas
+>    em §10.1-§10.5 depende delas — o item de coleção já é editável inline na
+>    tabela, e a página da carta mostra a posse. `/settings` não tem descrição
+>    em lugar nenhum do §10. Ambas ficam para quando algo realmente precisar.
+> 5. **`GET /api/v1/scan-results` (sem escopo de job) é aditivo.** O plano só
+>    tinha a versão aninhada `GET /api/v1/scans/{id}/results`; a fila de
+>    revisão (`/review`) precisa da fila **global** de pendências entre todos
+>    os jobs, que já existia como `ScanService.pending_results()` desde a
+>    Fase 5 — só faltava expor.
 
 ---
 
@@ -820,7 +858,9 @@ yugioh-scanner/
 │   │   └── fts.py              # criação/manutenção do índice FTS5
 │   │
 │   ├── repositories/           # acesso a dados; devolve modelos de domínio
-│   │   ├── cards.py  prints.py  sets.py  collection.py  scans.py
+│   │   ├── cards.py  sets.py  collection.py  scans.py  sync_state.py
+│   │   #  (prints não ganhou arquivo próprio: sempre consultado no contexto
+│   │   #   de uma carta — vive em `cards.py::CardRepository.prints_for`)
 │   │
 │   ├── ygoprodeck/
 │   │   ├── client.py           # httpx + retry + rate limit (token bucket)
@@ -851,7 +891,7 @@ yugioh-scanner/
 │   │
 │   ├── services/               # casos de uso — a API pública interna
 │   │   ├── sync_service.py  scan_service.py
-│   │   ├── collection_service.py  export_service.py
+│   │   ├── collection_service.py  export_service.py  catalog_service.py
 │   │
 │   ├── exporters/
 │   │   ├── base.py             # Protocol ExportProfile
@@ -866,9 +906,11 @@ yugioh-scanner/
 │   └── web/
 │       ├── app.py              # criação da app FastAPI, lifespan
 │       ├── deps.py             # dependências (sessão, serviços, settings)
+│       ├── scan_runner.py      # scans em background thread + fila SSE (Fase 8, ver desvio §9)
+│       ├── serializers.py      # ORM → dict, compartilhado entre rotas JSON e HTML
 │       ├── routes/             # dashboard.py scan.py review.py collection.py cards.py api.py
-│       ├── templates/          # Jinja2
-│       └── static/
+│       ├── templates/          # Jinja2 (base.html + 1 por tela + partials/)
+│       └── static/             # app.css, vendor/{htmx,pico}.min.{js,css} — sem CDN, sem build step
 │
 ├── tests/
 │   ├── conftest.py  factories.py

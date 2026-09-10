@@ -176,6 +176,17 @@ class CollectionRepository:
         self.session.flush()
         return quantity
 
+    def set_notes(self, item_id: int, notes: str | None) -> CollectionItem:
+        """Substitui a anotação livre (Fase 8: `PATCH /api/v1/collection/{id}`)."""
+        item = self.get(item_id)
+        if item is None:
+            raise CollectionItemNotFoundError(item_id)
+
+        item.notes = notes
+        item.updated_at = utcnow()
+        self.session.flush()
+        return item
+
     def set_print(self, item_id: int, card_print_id: int) -> CollectionItem:
         """Resolve manualmente o set de um item que estava `NULL` (plano §11.4).
 

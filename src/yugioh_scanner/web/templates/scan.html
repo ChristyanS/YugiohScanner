@@ -1,0 +1,161 @@
+{% extends "base.html" %}
+{% block title %}Scanner — Yu-Gi-Oh! Scanner{% endblock %}
+{% block content %}
+<h1>Scanner</h1>
+
+<article id="form-error"></article>
+
+<form id="scan-form">
+  <div class="grid">
+    <label>Pasta no servidor
+      <input type="text" name="folder" id="folder-input" placeholder="C:\fotos\cartas" required>
+    </label>
+    <label>Provider de OCR
+      <select name="provider">
+        {% for p in providers %}
+        <option value="{{ p }}" {% if p == default_provider %}selected{% endif %}>{{ p }}</option>
+        {% endfor %}
+      </select>
+    </label>
+  </div>
+  <div class="grid">
+    <label><input type="checkbox" name="recursive"> Incluir subpastas</label>
+    <label><input type="checkbox" name="auto" checked> Adicionar automaticamente (confiança alta)</label>
+    <label><input type="checkbox" name="reprocess"> Reprocessar imagens já vistas</label>
+  </div>
+  <button type="submit">Iniciar scan</button>
+</form>
+
+<hr>
+
+<h2>Ou envie fotos daqui</h2>
+<p class="kbd-hint">Até {{ max_upload_files }} arquivos, {{ max_upload_mb }} MB cada. JPG/PNG.</p>
+<div id="upload-drop" class="upload-drop">
+  Arraste fotos aqui, ou <label style="text-decoration: underline; cursor: pointer;">escolha arquivos
+    <input type="file" id="file-input" multiple accept="image/jpeg,image/png" hidden>
+  </label>
+</div>
+
+<section id="progress-section" hidden>
+  <h2>Progresso</h2>
+  <progress id="progress-bar" value="0" max="100"></progress>
+  <p id="progress-counts"></p>
+  <div id="scan-log" class="scan-log"></div>
+</section>
+
+<script>
+const form = document.getElementById("scan-form");
+const folderInput = document.getElementById("folder-input");
+const dropZone = document.getElementById("upload-drop");
+const fileInput = document.getElementById("file-input");
+const progressSection = document.getElementById("progress-section");
+const progressBar = document.getElementById("progress-bar");
+const progressCounts = document.getElementById("progress-counts");
+const scanLog = document.getElementById("scan-log");
+const errorBox = document.getElementById("form-error");
+
+function showError(message, hint) {
+  errorBox.innerHTML = `<div class="error-box"><strong>${message}</strong>${hint ? "<br><small>" + hint + "</small>" : ""}</div>`;
+}
+function clearError() { errorBox.innerHTML = ""; }
+
+async function uploadFiles(fileList) {
+  if (!fileList.length) return;
+  const data = new FormData();
+  for (const f of fileList) data.append("files", f);
+  dropZone.textContent = "Enviando...";
+  try {
+    const res = await fetch("/api/v1/uploads", { method: "POST", body: data });
+    const body = await res.json();
+    if (!res.ok) { showError(body.error || "Falha no envio", body.hint); return; }
+    folderInput.value = body.folder;
+    dropZone.textContent = `${body.saved} foto(s) recebida(s)` + (body.rejected.length ? `, ${body.rejected.length} rejeitada(s)` : "") + ". Pronto para escanear.";
+    clearError();
+  } catch (err) {
+    dropZone.textContent = "Falha no envio.";
+  }
+}
+
+dropZone.addEventListener("dragover", (e) => { e.preventDefault(); dropZone.classList.add("dragover"); });
+dropZone.addEventListener("dragleave", () => dropZone.classList.remove("dragover"));
+dropZone.addEventListener("drop", (e) => {
+  e.preventDefault();
+  dropZone.classList.remove("dragover");
+  uploadFiles(e.dataTransfer.files);
+});
+fileInput.addEventListener("change", () => uploadFiles(fileInput.files));
+
+function logLine(text) {
+  const line = document.createElement("div");
+  line.textContent = text;
+  scanLog.appendChild(line);
+  scanLog.scrollTop = scanLog.scrollHeight;
+}
+
+form.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  clearError();
+  const body = {
+    folder: folderInput.value,
+    provider: form.provider.value,
+    recursive: form.recursive.checked,
+    auto: form.auto.checked,
+    reprocess: form.reprocess.checked,
+  };
+  const res = await fetch("/api/v1/scans", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const payload = await res.json();
+  if (!res.ok) { showError(payload.error || "Não foi possível iniciar o scan", payload.hint); return; }
+
+  progressSection.hidden = false;
+  progressBar.removeAttribute("value");
+  progressCounts.textContent = "Iniciando...";
+  scanLog.innerHTML = "";
+
+  const source = new EventSource(`/api/v1/scans/live/${payload.run_id}/events`);
+  let processed = 0, autoAdded = 0, pending = 0, failed = 0, skipped = 0;
+
+  source.addEventListener("image", (ev) => {
+    const data = JSON.parse(ev.data);
+    if (data.skipped) { skipped++; logLine(`${data.file}: já processada, pulada`); }
+    else {
+      processed++;
+      if (data.decision === "auto" && data.applied) autoAdded++;
+      else if (data.status !== "ok") failed++;
+      else pending++;
+      logLine(`${data.file}: ${data.name || data.ocr_name || "?"} [${data.decision || data.status}]`);
+    }
+    progressCounts.textContent = `processadas: ${processed} · auto: ${autoAdded} · pendentes: ${pending} · falhas: ${failed} · puladas: ${skipped}`;
+  });
+
+  source.addEventListener("done", (ev) => {
+    const data = JSON.parse(ev.data);
+    progressBar.value = 100; progressBar.max = 100;
+    progressCounts.textContent = `Concluído: ${data.processed} processadas, ${data.auto_added} auto, ${data.pending} pendentes, ${data.failed} falhas.`;
+    if (data.job_id) logLine(`Job #${data.job_id} salvo.`);
+    source.close();
+  });
+
+  source.addEventListener("cancelled", () => {
+    progressCounts.textContent = "Cancelado.";
+    source.close();
+  });
+
+  source.addEventListener("scan-error", (ev) => {
+    const data = JSON.parse(ev.data);
+    showError(data.message || "Erro durante o scan");
+    source.close();
+  });
+
+  // Este sim é o "error" nativo do EventSource: falha de conexão, não do scan.
+  source.addEventListener("error", () => {
+    if (source.readyState === EventSource.CLOSED) {
+      progressCounts.textContent += " (conexão encerrada)";
+    }
+  });
+});
+</script>
+{% endblock %}
