@@ -102,3 +102,6 @@ branch = true
 
 [tool.coverage.report]
 exclude_lines = ["pragma: no cover", "if TYPE_CHECKING:", "raise NotImplementedError"]
+# Gate da Fase 9 (plano §19.5) — medido em 89% em 2026-09-10.
+# `pytest --cov=src/yugioh_scanner` falha se cair abaixo disto.
+fail_under = 80

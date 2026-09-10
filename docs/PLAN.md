@@ -1276,16 +1276,26 @@ Regras que mantêm isso saudável:
 4. **`scripts/calibrate_thresholds.py`** roda o mesmo corpus produzindo curva precisão×recall por limiar. É assim que os números da §7.5 deixam de ser palpite.
 5. Fotos são suas, ficam no repositório (são pequenas, ~200 KB cada, ~5 MB no total) e não contêm nada sensível.
 
-### 19.5 Cobertura esperada
+### 19.5 Cobertura — medida na Fase 9
 
-| Área | Meta | Justificativa |
-|---|---|---|
-| `domain/` (normalização, setcode, confiança) | **≥ 95%** | Lógica pura, barata de testar, cara de errar |
-| `matching/`, `exporters/` | ≥ 90% | Onde os bugs silenciosos moram |
-| `repositories/`, `services/` | ≥ 80% | — |
-| `ocr/` providers concretos | ~40% | Testar wrapper de biblioteca externa tem retorno baixo |
-| `web/`, `cli/` | ≥ 70% | Caminhos felizes + erros |
-| **Global** | **≥ 80%**, com gate no CI | Alvo realista; cobertura não é qualidade, mas queda é sinal |
+Medido em 2026-09-10 (`pytest --cov=src/yugioh_scanner --cov-report=term-missing`, 613 testes, suíte padrão sem `ocr`/`slow`).
+
+| Área | Meta | Medido | Status |
+|---|---|---|---|
+| `domain/` (normalização, setcode, confiança) | **≥ 95%** | ~98% (setcode.py sozinho: 94%) | ✅ |
+| `matching/`, `exporters/` | ≥ 90% | exporters ~99%; matching: candidates 93%, resolver 99%, **engine.py 89%** | ⚠️ engine.py 1pp abaixo |
+| `repositories/`, `services/` | ≥ 80% | services 91-100%; repositories: a maioria ≥84%, **sync_state.py 71%** | ⚠️ sync_state.py abaixo |
+| `ocr/` providers concretos | ~40% | rapidocr_provider.py 25%, tesseract_provider.py 0% | ✅ (dentro do esperado — ver nota) |
+| `web/`, `cli/` | ≥ 70% | web/ 82-100%; cli/: maioria ≥84%, **sync_cmd.py 55%, web_cmd.py 35%** | ⚠️ dois arquivos abaixo |
+| **Global** | **≥ 80%** | **89%** | ✅ |
+
+**Gate:** `fail_under = 80` em `[tool.coverage.report]` (pyproject.toml) — falha local/CI ao rodar com `--cov`. Não há serviço de CI configurado neste repositório (sem remoto conectado no momento); o gate é a checagem que roda quando alguém executa a suíte com cobertura, local ou eventualmente em CI.
+
+**Gaps abaixo da própria meta da área (nenhum ameaça o gate global de 80%, documentados para quem for fechá-los depois):**
+- `matching/engine.py` (89% vs ≥90%): faltam os ramos de conflito nome×código e o corte por margem ambígua — não cobertos por teste específico.
+- `repositories/sync_state.py` (71% vs ≥80%): `get_datetime()` com valor inválido e `set_many()` isolado não têm teste próprio (cobertos só indiretamente via `sync_service`).
+- `cli/sync_cmd.py` (55%) e `cli/web_cmd.py` (35%): a maior parte de `sync_cmd.py` é a barra de progresso Rich (difícil de testar sem CliRunner capturar terminal de verdade); `web_cmd.py` é o `uvicorn.run(...)` em si — não faz sentido subir um servidor de verdade num teste unitário, e o resto do arquivo (validação de host, mensagens) já é exercitado.
+- **Achado à parte:** `ocr/paddle_provider.py`, `ocr/easyocr_provider.py` e `ocr/claude_provider.py` (Fase 10) **não existem** — só `rapidocr_provider.py` e `tesseract_provider.py` foram implementados, apesar de `config.BUILTIN_OCR_PROVIDERS` listar os cinco. Escolher `--provider paddle` hoje falha com `OcrProviderError` (erro limpo, não crash), mas a cascata completa do §6.3 está incompleta. Fora do escopo desta fase (Fase 3 é onde isso pertenceria); registrado aqui porque a medição de cobertura foi o que tornou a lacuna visível.
 
 ---
 
@@ -1329,17 +1339,52 @@ PRAGMA mmap_size    = 268435456;  -- 256 MB
 - Imagens: cache permanente em disco; uma URL nunca é baixada duas vezes.
 - `httpx.Client` reaproveitado (keep-alive), timeouts explícitos.
 
-### 20.5 Números-alvo (a validar na Fase 9)
+### 20.5 Números-alvo — medidos na Fase 9
 
-| Operação | Alvo |
-|---|---|
-| `init` completo (catálogo, sem imagens) | < 3 min |
-| `sync` sem mudanças | < 2 s |
-| Matching de uma leitura (tier 0/1) | < 1 ms |
-| Matching com fuzzy completo (tier 4) | < 50 ms |
-| Scan de 500 fotos, 8 workers, RapidOCR | < 6 min |
-| `collection list` com 5.000 itens | < 100 ms |
-| Export CSV de 5.000 itens | < 1 s |
+Medido em 2026-09-10 com `scripts/benchmark_performance.py`, hardware real do
+usuário (6 núcleos lógicos, `WORKER_CORE_DIVISOR=2` → 3 workers automáticos),
+catálogo real (14.533 cartas / 44.517 prints), sempre contra banco
+**escrachado** — nunca `data/yugioh.db`. O benchmark de scan usa fotos
+**sintéticas**: mede *throughput*, não acurácia (isso é o corpus real da
+§19.4/ADR 0001, ainda pendente).
+
+| Operação | Alvo | Medido | Status |
+|---|---|---|---|
+| `init` completo (catálogo, sem imagens) | < 3 min | **10,1 s** | ✅ |
+| `sync` sem mudanças (`checkDBVer`) | < 2 s | **0,10 s** | ✅ |
+| Matching de uma leitura (tier 0/1) | < 1 ms | **~1 ms** | ✅ (no limite) |
+| Matching com fuzzy completo (tier 4) | < 50 ms | **~210 ms** | ❌ 4× acima |
+| Scan de 500 fotos, RapidOCR | < 6 min | **~18–25 min** (extrapolado de 2,2–3,3 s/foto medido em corpus de 30–60) | ❌ 3–4× acima |
+| `collection list` com 5.000 itens | < 100 ms | **287 ms** | ❌ ~3× acima |
+| Export CSV de 5.000 itens | < 1 s | **363 ms** | ✅ |
+
+**O que não bateu, e por quê:**
+
+- **Tier 4 (fuzzy completo), ~210 ms — causa identificada.** §20.2 previa
+  `rapidfuzz.process.cdist(..., workers=-1)`; a implementação real em
+  `matching/candidates.py::NameIndex.search` usa `process.extract` — de
+  thread único, sem o paralelismo que o texto do plano assumia. O warmup do
+  índice em memória **não** era a causa (testado isoladamente): o custo é
+  mesmo da varredura. Não corrigido nesta fase — é o *fallback* mais raro da
+  escada (§7.3: "só roda quando o FTS não devolve nada"), tier 0/1 já cobre o
+  caminho comum dentro do alvo, e trocar o scorer de um motor de matching já
+  testado em produção sem medir se `cdist` de fato ajuda com 1 query
+  (paralelismo de `cdist` é pensado para N queries, não 1) é o tipo de
+  mudança que "otimizamos depois" (linha abaixo) existe para adiar.
+- **Scan de 500 fotos — a meta de "8 workers" nunca se sustentou no hardware
+  real.** Testado com 3 workers (automático) *e* 8 (forçado): 8 workers deu
+  2,43 s/foto contra 2,22 s/foto com 3 — **pior**, não melhor (núcleos
+  disputados). Confirma a decisão já registrada em `config.py`
+  (`WORKER_CORE_DIVISOR`, medida na Fase 3: ganho satura por volta de metade
+  dos núcleos). O número "< 6 min" do plano original assumia 8 workers
+  ajudando linearmente; em 6 núcleos lógicos isso nunca foi realista. Alvo
+  desatualizado, não bug de código.
+- **`collection list` com 5.000 itens, 287 ms.** `list_filtered` já é uma
+  consulta só (`lazy="joined"` em `card`/`card_print`, sem N+1). Sem um
+  culpado óbvio via inspeção — provavelmente o custo real de 2 joins sobre
+  5.000 linhas em SQLite num laptop pessoal. Não investigado a fundo (fora do
+  orçamento desta fase); número documentado para a próxima vez que alguém
+  precisar decidir se vale otimizar.
 
 Onde eu **não** vou otimizar preventivamente: paginação da API, sharding, cache Redis, índices especulativos. Medimos primeiro (Fase 9), otimizamos depois.
 

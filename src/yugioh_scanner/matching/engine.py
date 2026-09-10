@@ -60,6 +60,11 @@ class MatchResult:
     #: Prints possíveis quando o código é ambíguo (mesma carta, raridades).
     print_options: list[dict[str, Any]] = field(default_factory=list)
     tier: int | None = None
+    #: Nome e set code lidos apontam para a mesma carta? Espelha
+    #: `ConfidenceInput.agreement` (plano §7.4) — guardado aqui para que quem
+    #: recebe só o `MatchResult` (ex.: `scripts/calibrate_thresholds.py`)
+    #: consiga reconstruir a decisão sem recalcular o matching inteiro.
+    agreement: bool | None = None
 
     @property
     def matched(self) -> bool:
@@ -169,6 +174,7 @@ class MatchingEngine:
             candidates=[candidate.as_dict() for candidate in candidates],
             print_options=self._print_options(card_id, code),
             tier=best.tier,
+            agreement=agreement,
         )
 
     # ------------------------------------------------------------- internos

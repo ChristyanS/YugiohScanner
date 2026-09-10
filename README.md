@@ -18,9 +18,16 @@ O plano técnico completo está em [`docs/PLAN.md`](docs/PLAN.md).
 | 6 | CLI completa | ✅ |
 | 7 | Exportação | ✅ |
 | 8 | Interface Web | ✅ |
-| 9 | Calibração e performance | ⬜ |
+| 9 | Calibração e performance | 🟡 parcial¹ |
 | 10 | Fallback por LLM Vision (opcional) | ⬜ |
 | 11 | Empacotamento e documentação | ⬜ |
+
+¹ Performance (§20.5) e cobertura (§19.5) medidas e documentadas — números
+reais no plano. A calibração de confiança em si (`CONFIDENCE_AUTO`/
+`CONFIDENCE_REVIEW` contra fotos reais) está **bloqueada**: precisa de 15–25
+fotos suas (`tests/fixtures/cards/`, ver o README lá) que ainda não existem
+no repositório — nada foi inventado no lugar delas. Ferramenta pronta
+(`scripts/calibrate_thresholds.py`); ver `docs/adr/0001-limiares-de-confianca.md`.
 
 ## Requisitos
 
@@ -148,9 +155,13 @@ código, e são mascarados em logs e em `config show`.
 
 ```bash
 pytest                    # suíte principal (rápida, sem rede e sem OCR real)
-pytest -m ocr             # testes de OCR com fotos reais (opt-in)
+pytest --cov=src/yugioh_scanner   # com gate de cobertura (≥80%, plano §19.5)
+pytest -m ocr             # testes de OCR com fotos reais (opt-in) + corpus da Fase 9
 ruff check . && ruff format --check .
 mypy src
+
+python scripts/calibrate_thresholds.py       # calibra os limiares contra o corpus real
+python scripts/benchmark_performance.py      # mede os alvos do plano §20.5
 ```
 
 A suíte principal não toca na rede nem em motores de OCR de verdade: as
@@ -173,6 +184,34 @@ espaço comido):
 
 O número que mais importa é o segundo: as duas leituras erradas foram para
 revisão manual, não para a coleção. A política prefere perguntar a errar.
+
+### Performance (Fase 9)
+
+Medido em 2026-09-10 com `scripts/benchmark_performance.py` (mesma máquina da
+seção anterior). Tabela completa e a explicação de cada item que ficou acima
+do alvo em `docs/PLAN.md` §20.5 — os dois achados relevantes:
+
+- **Tier 4 do matching (fuzzy no catálogo inteiro) mede ~210 ms**, não os
+  ~20-50 ms que o plano original previa: a implementação usa
+  `rapidfuzz.process.extract` (thread único) em vez do
+  `process.cdist(workers=-1)` descrito em §20.2. É o *fallback* mais raro da
+  escada de tiers (tier 0/1 já atende o caso comum dentro do alvo) — achado
+  registrado, correção não aplicada nesta fase.
+- **Scan em paralelo não melhora com mais workers que o automático.** Medido
+  com 3 workers (automático) *e* 8 (forçado): 8 workers foi **mais lento**
+  (2,43 s/foto vs 2,22 s/foto) — núcleos disputados, não ociosos. Confirma a
+  decisão de `WORKER_CORE_DIVISOR` já em `config.py`.
+
+### Calibração de confiança (Fase 9 — bloqueada, não inventada)
+
+`CONFIDENCE_AUTO`/`CONFIDENCE_REVIEW` continuam nos valores de julgamento de
+engenharia das Fases 1-4 — **não** foram recalibrados porque isso exigiria
+medir contra fotos reais suas, e nenhuma existe ainda no repositório (plano
+§19.4 é explícito: as fotos são do usuário, não geradas nem baixadas). A
+ferramenta está pronta e testada (`scripts/calibrate_thresholds.py` +
+`tests/ocr/test_corpus_accuracy.py`, que pula sozinho sem corpus) — falta só
+adicionar 15–25 fotos em `tests/fixtures/cards/` (ver o README de lá para o
+formato). Contexto completo em `docs/adr/0001-limiares-de-confianca.md`.
 
 ### Sobre `--workers`
 
