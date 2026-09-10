@@ -4,7 +4,9 @@ Scanner e gerenciador de coleção de cartas de Yu-Gi-Oh!: fotografe suas cartas
 deixe o OCR identificar nome e set number, e mantenha a coleção em um banco
 SQLite local — utilizável pelo terminal ou por uma interface web.
 
-O plano técnico completo está em [`docs/PLAN.md`](docs/PLAN.md).
+Documentação: [`docs/architecture.md`](docs/architecture.md) (visão geral
+atual do sistema), [`docs/adr/`](docs/adr/) (decisões individuais) e
+[`docs/PLAN.md`](docs/PLAN.md) (o plano técnico original completo).
 
 ## Estado atual
 
@@ -20,7 +22,7 @@ O plano técnico completo está em [`docs/PLAN.md`](docs/PLAN.md).
 | 8 | Interface Web | ✅ |
 | 9 | Calibração e performance | 🟡 parcial¹ |
 | 10 | Fallback por LLM Vision (opcional) | ⬜ |
-| 11 | Empacotamento e documentação | ⬜ |
+| 11 | Empacotamento e documentação | 🟡 parcial² |
 
 ¹ Performance (§20.5) e cobertura (§19.5) medidas e documentadas — números
 reais no plano. A calibração de confiança em si (`CONFIDENCE_AUTO`/
@@ -28,6 +30,12 @@ reais no plano. A calibração de confiança em si (`CONFIDENCE_AUTO`/
 fotos suas (`tests/fixtures/cards/`, ver o README lá) que ainda não existem
 no repositório — nada foi inventado no lugar delas. Ferramenta pronta
 (`scripts/calibrate_thresholds.py`); ver `docs/adr/0001-limiares-de-confianca.md`.
+
+² README, `docs/architecture.md` e 8 ADRs (`docs/adr/`) prontos. O
+`Dockerfile` foi escrito mas **não verificado**: o ambiente onde foi criado
+não tinha Docker disponível — só o que dava para checar sem Docker
+(instalação do pacote e CLI, ver comentário no topo do `Dockerfile`) foi
+checado. `docker build`/`docker run` de verdade ficam pendentes.
 
 ## Requisitos
 
@@ -55,9 +63,14 @@ Extras disponíveis:
 | `ocr` | RapidOCR, Pillow, RapidFuzz | Motor de OCR padrão — sem dependência de sistema |
 | `web` | FastAPI, Uvicorn, Jinja2 | Interface web |
 | `tesseract` | pytesseract | Se você já tem o Tesseract instalado |
-| `paddle` / `easyocr` | motores alternativos | Pesados; só se precisar |
-| `llm` | SDK da Anthropic | Fallback por Claude Vision |
+| `llm` | SDK da Anthropic | Fallback por Claude Vision (Fase 10, ainda não implementado) |
 | `dev` | pytest, ruff, mypy | Desenvolvimento |
+
+`paddle` e `easyocr` aparecem em `config.BUILTIN_OCR_PROVIDERS` e têm extras
+declarados em `pyproject.toml`, mas os providers (`ocr/paddle_provider.py`,
+`ocr/easyocr_provider.py`) **ainda não foram implementados** — escolher
+`--provider paddle` hoje falha com um erro limpo (`OcrProviderError`), não um
+crash. Só `rapidocr` e `tesseract` funcionam agora.
 
 ## Uso rápido
 
@@ -228,6 +241,73 @@ Praticamente todo o ganho está em sair de 1 para 2. Por isso o default é
 **metade dos núcleos**, e não `cpu-1`: mais processos custam memória e tempo de
 spawn sem aumentar o throughput. Ajuste com `--workers` se sua máquina for
 diferente.
+
+## Solução de problemas
+
+**`sqlite3.OperationalError: no such module: fts5`** — seu Python foi
+compilado sem FTS5 (comum em builds Linux de distro antiga). O instalador
+oficial do [python.org](https://www.python.org/) já vem com FTS5 no Windows e
+no macOS; no Linux, use a versão do `deadsnakes` PPA (Ubuntu) ou compile com
+`--enable-loadable-sqlite-extensions`. Confira com:
+```bash
+python -c "import sqlite3; print(sqlite3.connect(':memory:').execute(\"pragma compile_options\").fetchall())"
+```
+(procure `ENABLE_FTS5` na lista).
+
+**`yugioh-scanner` diz que o banco não existe, ou está desatualizado** —
+`db status` mostra o estado exato; `db upgrade` cria/atualiza. Nenhum comando
+apaga dados sozinho: migrações destrutivas fazem backup em `data/backups/`
+antes (plano §21).
+
+**`OcrProviderError: provider de OCR desconhecido` ou `não está disponível`**
+— ou o nome está errado (`rapidocr`, `tesseract` são os únicos implementados
+hoje — ver tabela de extras acima), ou a dependência opcional não foi
+instalada: `pip install -e ".[ocr]"` para o padrão, `.[tesseract]` mais o
+próprio [Tesseract instalado no sistema](https://github.com/UB-Mannheim/tesseract/wiki)
+(Windows) para o alternativo.
+
+**RapidOCR falha ao instalar (`onnxruntime` sem wheel para sua plataforma)**
+— acontece em Python muito novo ou arquitetura incomum (ARM64 Windows, por
+exemplo). Confira se há build do `onnxruntime` para sua combinação exata de
+SO/arquitetura/Python antes de tentar; `tesseract` é a alternativa mais
+portável (exige instalar o Tesseract separadamente).
+
+**`yugioh-scanner web` não sobe / `ImportError`** — dependências da web não
+instaladas: `pip install -e ".[web]"`. Se a porta 8000 já estiver em uso,
+`yugioh-scanner web --port 8080`.
+
+**Caracteres estranhos (`?`, quadrados) no terminal do Windows** — o `cmd.exe`
+clássico às vezes não suporta UTF-8; a CLI já degrada símbolos Unicode para
+ASCII automaticamente quando detecta isso (✓ vira `+`), mas nomes de carta
+acentuados podem continuar estranhos. Use o Windows Terminal ou PowerShell 7+,
+que já vêm em UTF-8 por padrão.
+
+**Scan não encontra nada, ou recusa a pasta** — confira `ALLOWED_SCAN_ROOTS`
+em `config show`: se configurado, só pastas dentro dele são aceitas (plano
+§21). Vazio (o padrão) aceita qualquer caminho local.
+
+**Chave da Anthropic aparece nos logs** — não deveria: `config show` mascara
+segredos e o logger redige o padrão `sk-ant-*` automaticamente. Se você vir
+uma chave completa em algum lugar, é um bug — abra uma issue.
+
+## Docker (opcional, não verificado)
+
+```bash
+docker build -t yugioh-scanner .
+docker run -d --name yugioh-scanner -p 8000:8000 -v yugioh-data:/app/data yugioh-scanner init
+docker run -d --name yugioh-scanner -p 8000:8000 -v yugioh-data:/app/data yugioh-scanner web --host 0.0.0.0
+```
+
+O `Dockerfile` foi escrito num ambiente sem Docker disponível para testar —
+**`docker build`/`docker run` não foram verificados de verdade.** O que foi
+verificado sem Docker (venv limpo, só com os arquivos que o `Dockerfile`
+copia): `pip install -e ".[ocr,web]"` completa, `yugioh-scanner --help` e
+`db upgrade` funcionam. A camada de container em si (imagem base,
+`apt-get`, `ENTRYPOINT`, volume, rede) é o que falta confirmar — é o item
+pendente do critério de aceitação da Fase 11 (`docs/PLAN.md`). `--host
+0.0.0.0` é necessário dentro do container, mas a aplicação continua sem
+autenticação ([ADR 0007](docs/adr/0007-sem-autenticacao.md)) — o único
+isolamento é o mapeamento de porta do Docker.
 
 ## Licença
 
