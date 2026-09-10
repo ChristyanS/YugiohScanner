@@ -17,6 +17,7 @@ from ..db.engine import database_exists, engine_from_settings
 from ..db.migrations import is_up_to_date
 from ..db.session import Database
 from ..services.collection_service import CollectionService
+from ..services.export_service import ExportService
 from ..services.scan_service import ScanService
 from ..services.sync_service import SyncService
 from ..ygoprodeck.client import YgoProDeckClient
@@ -85,5 +86,17 @@ def collection_service(settings: Settings | None = None) -> Iterator[CollectionS
     try:
         with database.session() as session:
             yield CollectionService(session)
+    finally:
+        database.dispose()
+
+
+@contextmanager
+def export_service(settings: Settings | None = None) -> Iterator[ExportService]:
+    """`ExportService` pronto — mesmo padrão de sessão de `collection_service`."""
+    settings = settings or get_settings()
+    database = require_database(settings)
+    try:
+        with database.session() as session:
+            yield ExportService(session)
     finally:
         database.dispose()

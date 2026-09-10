@@ -16,7 +16,7 @@ O plano técnico completo está em [`docs/PLAN.md`](docs/PLAN.md).
 | 4 | Matching | ✅ |
 | 5 | Coleção | ✅ |
 | 6 | CLI completa | ✅ |
-| 7 | Exportação | ⬜ |
+| 7 | Exportação | ✅ |
 | 8 | Interface Web | ⬜ |
 | 9 | Calibração e performance | ⬜ |
 | 10 | Fallback por LLM Vision (opcional) | ⬜ |
@@ -72,6 +72,12 @@ yugioh-scanner collection set-print 5 LOB-001   # resolve um item sem set defini
 yugioh-scanner collection show 5                # carta + todos os prints conhecidos
 yugioh-scanner collection stats
 yugioh-scanner config show     # configuração efetiva (segredos mascarados)
+
+yugioh-scanner export --list-profiles                       # perfis disponíveis e suas colunas
+yugioh-scanner export --format csv                           # perfil padrão (ygoprodeck) no stdout
+yugioh-scanner export --format csv --profile ygopocket -o coleção.csv
+yugioh-scanner export --format txt --profile deck            # uma linha por cópia
+yugioh-scanner export --format csv --profile full -o backup.csv --skip-unresolved
 ```
 
 O `init` baixa ~14.500 cartas, ~44.500 prints e ~646 sets em cerca de 12
@@ -89,6 +95,19 @@ arquivos não engana o sistema. Confirmado em produção contra o catálogo real
 2ª execução: 6/6 imagens puladas, coleção continua com 5 itens / 5 cópias
 --reprocess: relê as 6, decisão continua "auto", mas 0 são reaplicadas
 ```
+
+### Perfis de exportação
+
+| Perfil | Formato | Verificação |
+|---|---|---|
+| `ygoprodeck` (padrão do CSV) | csv | 7 colunas confirmadas no fórum/suporte oficial (docs/PLAN.md §0.4) |
+| `ygopocket` | csv, txt | Byte a byte contra exports reais fornecidos pelo usuário (`export-samples/`) |
+| `full` | csv | Superset com os IDs internos — único com round-trip garantido (export → import → coleção idêntica) |
+| `list` (padrão do TXT), `deck` | txt | Formatos próprios, não tentam imitar nenhum app externo |
+
+`--skip-unresolved` omite itens sem print identificado em vez de exportá-los
+com as colunas de set vazias. Todo CSV neutraliza injeção de fórmula
+(`=`/`+`/`-`/`@` no início de uma célula vira `'=`/`'+`/... antes de gravar).
 
 ## Configuração
 

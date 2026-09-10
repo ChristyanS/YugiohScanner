@@ -5,12 +5,15 @@ interfaces; nenhum serviço conhece HTTP ou terminal.
 """
 
 from .collection_service import CollectionService, CollectionStats
+from .export_service import ExportReport, ExportService
 from .scan_service import ImageEvent, ScanRunReport, ScanService
 from .sync_service import SyncDecision, SyncReport, SyncService
 
 __all__ = [
     "CollectionService",
     "CollectionStats",
+    "ExportReport",
+    "ExportService",
     "ImageEvent",
     "ScanRunReport",
     "ScanService",

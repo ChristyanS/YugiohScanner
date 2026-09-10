@@ -17,7 +17,7 @@ from .. import __version__
 from ..config import get_settings
 from ..errors import YugiohScannerError
 from ..logging_setup import configure_logging
-from . import collection_cmd, db_cmd, review_cmd, scan_cmd, sync_cmd
+from . import collection_cmd, db_cmd, export_cmd, review_cmd, scan_cmd, sync_cmd
 from .errors import handle_errors
 from .render import fail, print_json, print_key_values
 
@@ -39,6 +39,7 @@ app.command("check-updates")(sync_cmd.check_command)
 app.command("scan")(scan_cmd.scan_command)
 app.command("scan-status")(scan_cmd.scan_status_command)
 app.command("review")(review_cmd.review_command)
+app.command("export")(export_cmd.export_command)
 
 
 def _version_callback(value: bool) -> None:
