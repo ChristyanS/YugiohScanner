@@ -154,6 +154,25 @@ class TestAutomaticMatching:
             assert session.scalar(select(func.count()).select_from(ScanImage)) == 4
             assert session.scalar(select(func.count()).select_from(ScanResult)) == 4
 
+    def test_job_counters_are_persisted_not_just_in_the_report(
+        self, catalog: Database, settings: Settings, cards_folder: Path
+    ) -> None:
+        """Regressão: as colunas de contagem do `ScanJob` existem no schema
+        desde a Fase 1 mas nunca eram escritas — só o `ScanRunReport` em
+        memória (devolvido só para esta chamada) tinha os números certos.
+        Um `scan-status` lendo o job persistido via outra sessão via sempre
+        zero."""
+        report = scan(catalog, settings, cards_folder)
+        with catalog.session() as session:
+            job = session.get(ScanJob, report.job_id)
+            assert job is not None
+            assert job.total_images == report.total_images == 4
+            assert job.processed == report.processed == 4
+            assert job.auto_added == report.auto_added == 3
+            assert job.pending == report.pending == 1
+            assert job.failed == report.failed == 0
+            assert job.skipped == report.skipped == 0
+
 
 class TestIdempotency:
     """O critério central da fase: rodar duas vezes não muda nada."""
@@ -335,3 +354,123 @@ class TestEmptyFolder:
         report = scan(catalog, settings, empty)
         assert report.total_images == 0
         assert report.job_id is None
+
+
+class TestReview:
+    """`confirm_result`/`reject_result`/`pending_results` — a fila do `review`
+    (Fase 6). Usa `--no-auto` para produzir pendências determinísticas."""
+
+    def test_pending_results_lists_what_scan_left_open(
+        self, catalog: Database, settings: Settings, cards_folder: Path
+    ) -> None:
+        scan(catalog, settings, cards_folder, no_auto=True)
+        pending = service(catalog, settings).pending_results()
+        assert len(pending) == 4
+        # A relação `scan_image` precisa estar acessível fora da sessão que
+        # o método usou internamente (plano: sem DetachedInstanceError).
+        assert all(result.scan_image.file_path for result in pending)
+
+    def test_confirm_applies_to_the_collection(
+        self, catalog: Database, settings: Settings, cards_folder: Path
+    ) -> None:
+        scan(catalog, settings, cards_folder, no_auto=True)
+        svc = service(catalog, settings)
+        pending = svc.pending_results()
+        blue_eyes_result = next(r for r in pending if r.ocr_name_raw == "Blue-Eyes White Dragon")
+
+        item = svc.confirm_result(blue_eyes_result.id, card_id=BLUE_EYES, card_print_id=None)
+
+        assert item.card_id == BLUE_EYES
+        assert item.quantity == 1
+        # Objeto devolvido não pode estar detached (plano: DetachedInstanceError).
+        assert item.card.name == "Blue-Eyes White Dragon"
+
+    def test_confirmed_result_leaves_the_pending_queue(
+        self, catalog: Database, settings: Settings, cards_folder: Path
+    ) -> None:
+        scan(catalog, settings, cards_folder, no_auto=True)
+        svc = service(catalog, settings)
+        target = svc.pending_results()[0]
+
+        svc.confirm_result(target.id, card_id=BLUE_EYES, card_print_id=None)
+
+        remaining_ids = {r.id for r in svc.pending_results()}
+        assert target.id not in remaining_ids
+
+    def test_confirm_twice_raises(
+        self, catalog: Database, settings: Settings, cards_folder: Path
+    ) -> None:
+        from yugioh_scanner.errors import ScanResultAlreadyAppliedError
+
+        scan(catalog, settings, cards_folder, no_auto=True)
+        svc = service(catalog, settings)
+        target = svc.pending_results()[0]
+        svc.confirm_result(target.id, card_id=BLUE_EYES, card_print_id=None)
+
+        with pytest.raises(ScanResultAlreadyAppliedError):
+            svc.confirm_result(target.id, card_id=BLUE_EYES, card_print_id=None)
+
+    def test_confirming_unknown_result_raises(self, catalog: Database, settings: Settings) -> None:
+        from yugioh_scanner.errors import ScanResultNotFoundError
+
+        with pytest.raises(ScanResultNotFoundError):
+            service(catalog, settings).confirm_result(999999, card_id=BLUE_EYES)
+
+    def test_reject_leaves_the_collection_untouched(
+        self, catalog: Database, settings: Settings, cards_folder: Path
+    ) -> None:
+        scan(catalog, settings, cards_folder, no_auto=True)
+        svc = service(catalog, settings)
+        target = svc.pending_results()[0]
+
+        svc.reject_result(target.id)
+
+        assert target.id not in {r.id for r in svc.pending_results()}
+        assert snapshot(catalog) == []
+
+    def test_rejecting_unknown_result_raises(self, catalog: Database, settings: Settings) -> None:
+        from yugioh_scanner.errors import ScanResultNotFoundError
+
+        with pytest.raises(ScanResultNotFoundError):
+            service(catalog, settings).reject_result(999999)
+
+    def test_confirming_a_different_card_than_the_reading_works(
+        self, catalog: Database, settings: Settings, cards_folder: Path
+    ) -> None:
+        """A revisão humana pode corrigir a leitura, não só confirmá-la."""
+        scan(catalog, settings, cards_folder, no_auto=True)
+        svc = service(catalog, settings)
+        target = svc.pending_results()[0]
+
+        item = svc.confirm_result(target.id, card_id=DARK_MAGICIAN, card_print_id=None)
+        assert item.card_id == DARK_MAGICIAN
+
+
+class TestJobIntrospection:
+    def test_recent_jobs_lists_newest_first(
+        self, catalog: Database, settings: Settings, cards_folder: Path, tmp_path: Path
+    ) -> None:
+        first = scan(catalog, settings, cards_folder)
+        second_folder = tmp_path / "outra"
+        second_folder.mkdir()
+        make_card_image(second_folder / "unica.jpg", name="Outra Carta")
+        second = scan(catalog, settings, second_folder)
+
+        jobs = service(catalog, settings).recent_jobs()
+        assert [job.id for job in jobs[:2]] == [second.job_id, first.job_id]
+
+    def test_job_detail_matches_the_report(
+        self, catalog: Database, settings: Settings, cards_folder: Path
+    ) -> None:
+        report = scan(catalog, settings, cards_folder)
+        job = service(catalog, settings).job_detail(report.job_id)
+        assert job.total_images == report.total_images
+        assert job.auto_added == report.auto_added
+        assert job.pending == report.pending
+        assert job.status == "done"
+
+    def test_unknown_job_raises(self, catalog: Database, settings: Settings) -> None:
+        from yugioh_scanner.errors import JobNotFoundError
+
+        with pytest.raises(JobNotFoundError):
+            service(catalog, settings).job_detail(999999)

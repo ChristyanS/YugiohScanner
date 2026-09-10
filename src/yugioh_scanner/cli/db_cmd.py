@@ -32,6 +32,7 @@ from ..db.tables import (
     SYNC_KEY_DATABASE_VERSION,
     SYNC_KEY_LAST_FULL_SYNC,
 )
+from .errors import handle_errors
 from .render import (
     ARROW,
     fail,
@@ -47,6 +48,7 @@ app = typer.Typer(help="Manutenção do banco de dados local.", no_args_is_help=
 
 
 @app.command("upgrade")
+@handle_errors
 def upgrade(
     revision: str = typer.Option("head", help="Revisão alvo."),
 ) -> None:
@@ -65,6 +67,7 @@ def upgrade(
 
 
 @app.command("downgrade")
+@handle_errors
 def downgrade(
     revision: str = typer.Argument(..., help="Revisão alvo ('base' desfaz tudo)."),
     yes: bool = typer.Option(False, "--yes", "-y", help="Não perguntar."),
@@ -90,6 +93,7 @@ def downgrade(
 
 
 @app.command("status")
+@handle_errors
 def status(
     as_json: bool = typer.Option(False, "--json", help="Saída em JSON."),
 ) -> None:
@@ -163,6 +167,7 @@ def status(
 
 
 @app.command("check")
+@handle_errors
 def check() -> None:
     """Verifica integridade do arquivo e chaves estrangeiras."""
     settings = get_settings()
@@ -184,6 +189,7 @@ def check() -> None:
 
 
 @app.command("vacuum")
+@handle_errors
 def vacuum_cmd() -> None:
     """Compacta o banco e recalcula estatísticas do planejador."""
     from ..db import vacuum

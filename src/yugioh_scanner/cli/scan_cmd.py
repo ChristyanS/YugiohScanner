@@ -23,10 +23,13 @@ from rich.progress import (
 )
 
 from ..config import get_settings
+from ..db.tables import ScanJob
 from ..logging_setup import get_logger, log_context
 from ..services.scan_service import ImageEvent, ScanRunReport, ScanService
 from .context import require_database
+from .errors import handle_errors
 from .render import console, print_json, print_key_values, print_table, success, warn
+from .review_cmd import print_review_outcome, run_interactive_review
 
 log = get_logger(__name__)
 
@@ -48,6 +51,7 @@ def _log_event(event: ImageEvent) -> None:
             )
 
 
+@handle_errors
 def scan_command(
     folder: Path = typer.Argument(..., help="Pasta com as fotos das cartas."),
     workers: int = typer.Option(
@@ -70,6 +74,12 @@ def scan_command(
         False,
         "--reprocess",
         help="Roda o OCR de novo em imagens já vistas (não reaplica na coleção).",
+    ),
+    interactive: bool = typer.Option(
+        False,
+        "--interactive",
+        "-i",
+        help="Ao terminar, revisa as pendências na hora (mesmo laço de `review`).",
     ),
     as_json: bool = typer.Option(False, "--json", help="Saída em JSON."),
 ) -> None:
@@ -109,10 +119,19 @@ def scan_command(
                 no_auto=no_auto,
                 reprocess=reprocess,
             )
+
+        _render(report, as_json=as_json, apply=apply)
+
+        # `--interactive` só faz sentido depois de gravar (dry-run não deixa
+        # nada pendente para confirmar) e fora do modo --json (é um prompt de
+        # terminal). Revisa a fila inteira, não só o que este job deixou
+        # pendente — um só código para `review` e para este atalho.
+        if interactive and apply and not as_json and report.pending:
+            pending = service.pending_results()
+            if pending:
+                print_review_outcome(run_interactive_review(service, pending))
     finally:
         database.dispose()
-
-    _render(report, as_json=as_json, apply=apply)
 
 
 def _scan_with_progress(
@@ -191,4 +210,70 @@ def _render(report: ScanRunReport, *, as_json: bool, apply: bool) -> None:
     elif report.auto_added:
         success(f"{report.auto_added} carta(s) adicionada(s) à coleção.")
     if report.pending:
-        warn(f"{report.pending} leitura(s) aguardando revisão (scan review chega na Fase 6).")
+        warn(f"{report.pending} leitura(s) aguardando revisão — rode `yugioh-scanner review`.")
+
+
+@handle_errors
+def scan_status_command(
+    job_id: int = typer.Argument(None, help="Job específico. Omitido: lista os recentes."),
+    limit: int = typer.Option(10, "--limit", "-n", help="Quantos jobs listar (sem JOB_ID)."),
+    as_json: bool = typer.Option(False, "--json", help="Saída em JSON."),
+) -> None:
+    """Mostra o progresso/estatísticas de um job, ou lista os últimos."""
+    settings = get_settings()
+    database = require_database(settings)
+    try:
+        service = ScanService(database, settings)
+
+        if job_id is not None:
+            job = service.job_detail(job_id)
+            payload = _job_dict(job)
+            if as_json:
+                print_json(payload)
+            else:
+                print_key_values(f"Job #{job.id}", payload)
+            return
+
+        jobs = service.recent_jobs(limit=limit)
+        if as_json:
+            print_json([_job_dict(job) for job in jobs])
+            return
+        print_table(
+            "Últimos scans",
+            ["ID", "Pasta", "Status", "Processadas", "Auto", "Pendentes", "Falhas", "Início"],
+            [
+                [
+                    job.id,
+                    job.folder_path,
+                    job.status,
+                    job.processed,
+                    job.auto_added,
+                    job.pending,
+                    job.failed,
+                    job.started_at.strftime("%Y-%m-%d %H:%M"),
+                ]
+                for job in jobs
+            ],
+            empty_message="Nenhum scan executado ainda.",
+        )
+    finally:
+        database.dispose()
+
+
+def _job_dict(job: ScanJob) -> dict[str, object]:
+    return {
+        "id": job.id,
+        "folder_path": job.folder_path,
+        "status": job.status,
+        "ocr_provider": job.ocr_provider,
+        "workers": job.workers,
+        "total_images": job.total_images,
+        "processed": job.processed,
+        "skipped": job.skipped,
+        "auto_added": job.auto_added,
+        "pending": job.pending,
+        "failed": job.failed,
+        "started_at": job.started_at.isoformat(),
+        "finished_at": job.finished_at.isoformat() if job.finished_at else None,
+        "error": job.error,
+    }

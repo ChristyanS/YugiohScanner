@@ -15,7 +15,7 @@ O plano técnico completo está em [`docs/PLAN.md`](docs/PLAN.md).
 | 3 | Scanner + OCR | ✅ |
 | 4 | Matching | ✅ |
 | 5 | Coleção | ✅ |
-| 6 | CLI completa | ⬜ |
+| 6 | CLI completa | ✅ |
 | 7 | Exportação | ⬜ |
 | 8 | Interface Web | ⬜ |
 | 9 | Calibração e performance | ⬜ |
@@ -61,6 +61,16 @@ yugioh-scanner scan ./cartas   # lê, identifica e grava na coleção (padrão)
 yugioh-scanner scan ./cartas --dry-run    # só mostra o que aconteceria
 yugioh-scanner scan ./cartas --no-auto    # nada entra sozinho; tudo vira pendente
 yugioh-scanner scan ./cartas --reprocess  # relê imagens já vistas (não reaplica)
+yugioh-scanner scan ./cartas --interactive  # revisa as pendências assim que o scan termina
+yugioh-scanner review                      # fila de revisão (confirma/rejeita, com candidatos)
+yugioh-scanner scan-status                 # últimos scans e suas estatísticas
+
+yugioh-scanner collection list --search "blue eyes"  # busca, filtro, ordenação
+yugioh-scanner collection add "dark magician" --set-code SDK-001
+yugioh-scanner collection remove 3 --qty 1
+yugioh-scanner collection set-print 5 LOB-001   # resolve um item sem set definido
+yugioh-scanner collection show 5                # carta + todos os prints conhecidos
+yugioh-scanner collection stats
 yugioh-scanner config show     # configuração efetiva (segredos mascarados)
 ```
 

@@ -37,10 +37,43 @@ class ScanRepository:
         self.session.flush()
         return job
 
-    def finish_job(self, job: ScanJob, *, status: str = "done", error: str | None = None) -> None:
+    def finish_job(
+        self,
+        job: ScanJob,
+        *,
+        status: str = "done",
+        error: str | None = None,
+        total_images: int | None = None,
+        processed: int | None = None,
+        skipped: int | None = None,
+        auto_added: int | None = None,
+        pending: int | None = None,
+        failed: int | None = None,
+    ) -> None:
+        """Fecha o job — e é aqui que as contagens finais ficam persistidas.
+
+        Regressão real (Fase 6): as colunas de contagem existiam no schema
+        desde a Fase 1, mas nada nunca as escrevia — só o `ScanRunReport`
+        em memória (devolvido para quem chamou `scan()`) carregava os
+        números certos. `scan-status`/`recent_jobs()` liam sempre zero até
+        um comando novo (que consulta o `ScanJob` persistido em vez do
+        report de uma execução específica) expor o buraco.
+        """
         job.status = status
         job.error = error
         job.finished_at = utcnow()
+        if total_images is not None:
+            job.total_images = total_images
+        if processed is not None:
+            job.processed = processed
+        if skipped is not None:
+            job.skipped = skipped
+        if auto_added is not None:
+            job.auto_added = auto_added
+        if pending is not None:
+            job.pending = pending
+        if failed is not None:
+            job.failed = failed
 
     def get_job(self, job_id: int) -> ScanJob | None:
         return self.session.get(ScanJob, job_id)
@@ -190,11 +223,18 @@ class ScanRepository:
     def get_result(self, result_id: int) -> ScanResult | None:
         return self.session.get(ScanResult, result_id)
 
+    #: Decisões que ainda esperam um humano. Inclui "unmatched" de propósito:
+    #: é o caso com zero candidatos — o que mais precisa de olho humano, não
+    #: menos. (Achado por teste: `no_auto=True` sobre uma leitura sem nenhum
+    #: candidato produz "unmatched", não "pending"; excluí-la da fila deixaria
+    #: essas leituras presas para sempre, sem forma de revisar ou rejeitar.)
+    _REVIEWABLE_DECISIONS = ("pending", "manual", "unmatched")
+
     def pending_results(self, limit: int = 100) -> list[ScanResult]:
         """Fila de revisão: decisões que ainda esperam um humano."""
         stmt = (
             select(ScanResult)
-            .where(ScanResult.decision.in_(("pending", "manual")))
+            .where(ScanResult.decision.in_(self._REVIEWABLE_DECISIONS))
             .where(ScanResult.applied.is_(False))
             .order_by(ScanResult.created_at)
             .limit(limit)
@@ -205,7 +245,7 @@ class ScanRepository:
         return len(
             self.session.scalars(
                 select(ScanResult.id)
-                .where(ScanResult.decision.in_(("pending", "manual")))
+                .where(ScanResult.decision.in_(self._REVIEWABLE_DECISIONS))
                 .where(ScanResult.applied.is_(False))
             ).all()
         )

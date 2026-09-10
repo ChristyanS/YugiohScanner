@@ -20,6 +20,7 @@ from typer.testing import CliRunner
 from tests.factories import make_card_image, make_corrupted_image
 from yugioh_scanner.cli.main import app
 from yugioh_scanner.config import reset_settings_cache
+from yugioh_scanner.errors import YugiohScannerError
 from yugioh_scanner.ocr.fake_provider import FakeOCRProvider
 from yugioh_scanner.ocr.registry import register_provider, unregister_provider
 from yugioh_scanner.scanner.worker import reset_provider
@@ -206,8 +207,16 @@ class TestResilience:
         assert json.loads(result.stdout)["total_images"] == 0
 
     def test_missing_folder_is_an_actionable_error(self, tmp_path: Path) -> None:
+        """Regressão: uma `YugiohScannerError` levantada direto do corpo do
+        comando (não via `require_database`) precisa do mesmo tratamento —
+        exit code da própria exceção e mensagem amigável, não um traceback
+        cru com exit code genérico."""
         result = runner.invoke(app, ["scan", str(tmp_path / "nao_existe")])
-        assert result.exit_code != 0
+        assert result.exit_code == 2
+        assert not isinstance(result.exception, YugiohScannerError), (
+            "a exceção do domínio não pode escapar crua até o CliRunner"
+        )
+        assert "não encontrada" in result.output
 
     def test_folder_outside_allowlist_is_refused(
         self, cards_folder: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -218,7 +227,9 @@ class TestResilience:
         reset_settings_cache()
 
         result = runner.invoke(app, ["scan", str(cards_folder), "--workers", "1"])
-        assert result.exit_code != 0
+        assert result.exit_code == 2
+        assert not isinstance(result.exception, YugiohScannerError)
+        assert "fora das raízes" in result.output
 
     def test_missing_database_is_an_actionable_error(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

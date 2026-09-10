@@ -25,8 +25,16 @@ from sqlalchemy.orm import Session
 
 from ..config import Settings
 from ..db.session import Database
-from ..db.tables import DEFAULT_CONDITION, DEFAULT_EDITION, DEFAULT_LANGUAGE
+from ..db.tables import (
+    DEFAULT_CONDITION,
+    DEFAULT_EDITION,
+    DEFAULT_LANGUAGE,
+    CollectionItem,
+    ScanJob,
+    ScanResult,
+)
 from ..domain.confidence import Decision
+from ..errors import JobNotFoundError, ScanResultAlreadyAppliedError, ScanResultNotFoundError
 from ..logging_setup import get_logger, log_context
 from ..matching.candidates import NameIndex
 from ..matching.engine import MatchingEngine, MatchResult
@@ -46,6 +54,11 @@ log = get_logger(__name__)
 #: forçaria reler o pacote inteiro no próximo `scan`). Em lote é o meio-termo
 #: do plano §20.3.
 COMMIT_BATCH_SIZE = 25
+
+#: Estados de decisão que só existem depois de revisão humana — fora do
+#: enum `Decision` de propósito (ver `confirm_result`/`reject_result`).
+_DECISION_CONFIRMED = "confirmed"
+_DECISION_REJECTED = "rejected"
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,6 +82,10 @@ class ImageEvent:
     confidence: float | None = None
     applied: bool = False
     error: str | None = None
+    #: `None` em dry-run e para imagens puladas/falhas — nada foi persistido.
+    #: Presente quando `decision` é `pending`/`manual`/`unmatched`: é por este
+    #: ID que `scan review` (Fase 6) confirma ou rejeita a leitura depois.
+    result_id: int | None = None
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -76,6 +93,7 @@ class ImageEvent:
             "status": self.status,
             "skipped": self.skipped,
             "decision": self.decision,
+            "result_id": self.result_id,
             "ocr_name": self.ocr_name,
             "ocr_code": self.ocr_code,
             "name": self.card_name,
@@ -204,6 +222,98 @@ class ScanService:
         )
         return report
 
+    # ------------------------------------------------------------------ revisão
+
+    def pending_results(self, limit: int = 100) -> list[ScanResult]:
+        """A fila de revisão (plano §12): leituras que esperam um humano."""
+        with self.database.session() as session:
+            results = ScanRepository(session).pending_results(limit=limit)
+            # Força o carregamento antes da sessão fechar — `scan_image` é
+            # `lazy` por padrão e o chamador (CLI) acessa fora deste `with`.
+            for result in results:
+                _ = result.scan_image.file_path
+            return results
+
+    def confirm_result(
+        self,
+        result_id: int,
+        *,
+        card_id: int,
+        card_print_id: int | None = None,
+        quantity: int = 1,
+    ) -> CollectionItem:
+        """Aplica manualmente um resultado pendente/manual (revisão humana).
+
+        É o mesmo destino de uma decisão `auto`, só que decidido por uma
+        pessoa em vez da política de confiança — por isso passa pela mesma
+        `CollectionRepository.add_copies` e fica marcado `applied=True`,
+        preservando a garantia de que uma imagem só conta uma vez (§13.2).
+        """
+        with self.database.session() as session:
+            scan_repo = ScanRepository(session)
+            collection_repo = CollectionRepository(session)
+
+            result = scan_repo.get_result(result_id)
+            if result is None:
+                raise ScanResultNotFoundError(result_id)
+            if result.applied:
+                raise ScanResultAlreadyAppliedError(result_id)
+
+            key = CollectionKey(
+                card_id=card_id,
+                card_print_id=card_print_id,
+                condition=DEFAULT_CONDITION,
+                edition=DEFAULT_EDITION,
+                language=DEFAULT_LANGUAGE,
+            )
+            item = collection_repo.add_copies(key, quantity, source="scan")
+            # "confirmed" não é uma saída da política de confiança (por isso
+            # não está no enum `Decision`, que é a saída pura de
+            # `domain/confidence.py`) — é um estado só de revisão humana,
+            # já previsto no CHECK do schema (`SCAN_DECISIONS`).
+            result.decision = _DECISION_CONFIRMED
+            result.card_id = card_id
+            result.card_print_id = card_print_id
+            scan_repo.mark_applied(result, item.id)
+
+            # Este método abre e fecha a própria sessão: sem tocar `.card`
+            # (relação `lazy="joined"`, mas só populada de fato no primeiro
+            # acesso) agora, o objeto devolvido ficaria "detached" e o
+            # chamador levaria `DetachedInstanceError` ao ler `item.card.name`.
+            _ = item.card
+            _ = item.card_print
+            session.expunge(item)
+            return item
+
+    def reject_result(self, result_id: int) -> None:
+        """Descarta uma leitura pendente sem tocar na coleção.
+
+        Não reprocessa: a `ScanImage` continua marcada como vista, então um
+        `scan` futuro na mesma pasta não volta a perguntar sobre ela.
+        """
+        with self.database.session() as session:
+            scan_repo = ScanRepository(session)
+            result = scan_repo.get_result(result_id)
+            if result is None:
+                raise ScanResultNotFoundError(result_id)
+            scan_repo.mark_decided(result, decision=_DECISION_REJECTED)
+
+    # -------------------------------------------------------------------- jobs
+
+    def recent_jobs(self, limit: int = 10) -> list[ScanJob]:
+        with self.database.session() as session:
+            jobs = ScanRepository(session).recent_jobs(limit=limit)
+            session.expunge_all()
+            return jobs
+
+    def job_detail(self, job_id: int) -> ScanJob:
+        with self.database.session() as session:
+            job = ScanRepository(session).get_job(job_id)
+            if job is None:
+                raise JobNotFoundError(job_id)
+            session.expunge(job)
+            return job
+
     # ---------------------------------------------------------------- internos
 
     def _run(
@@ -277,7 +387,16 @@ class ScanService:
                 since_commit = 0
 
         if apply and job is not None:
-            scan_repo.finish_job(job, status="done")
+            scan_repo.finish_job(
+                job,
+                status="done",
+                total_images=report.total_images,
+                processed=report.processed,
+                skipped=report.skipped,
+                auto_added=report.auto_added,
+                pending=report.pending,
+                failed=report.failed,
+            )
 
     def _handle_outcome(
         self,
@@ -333,8 +452,9 @@ class ScanService:
             decision = Decision.PENDING
 
         applied = False
+        result_id: int | None = None
         if apply and image is not None:
-            applied = self._apply_decision(
+            applied, result_id = self._apply_decision(
                 image.id,
                 decision,
                 match_result,
@@ -361,6 +481,7 @@ class ScanService:
             file_name=outcome.path.name,
             status=outcome.status,
             decision=decision.value,
+            result_id=result_id,
             ocr_name=outcome.read_name or None,
             ocr_code=outcome.read_code or None,
             card_name=match_result.card_name,
@@ -379,11 +500,13 @@ class ScanService:
         ocr_code_raw: str | None,
         scan_repo: ScanRepository,
         collection_repo: CollectionRepository,
-    ) -> bool:
+    ) -> tuple[bool, int]:
         """Grava o `ScanResult` e, se for o caso, soma a cópia na coleção.
 
-        Devolve se a cópia foi de fato aplicada — `False` também no caso
-        legítimo de `--reprocess` que já havia aplicado antes (plano §13.2).
+        Devolve `(aplicado, result_id)` — o ID é sempre gravado (mesmo quando
+        `aplicado=False`), pois é por ele que `scan review` confirma ou
+        rejeita a leitura depois. `aplicado=False` também no caso legítimo de
+        `--reprocess` que já havia aplicado antes (plano §13.2).
         """
         result = scan_repo.create_result(
             scan_image_id,
@@ -403,14 +526,14 @@ class ScanService:
         )
 
         if decision != Decision.AUTO or match_result.card_id is None:
-            return False
+            return False, result.id
 
         # Guarda de idempotência: esta imagem já contribuiu antes? Isso só
         # pode acontecer sob --reprocess — uma imagem nova nunca tem
         # resultado anterior aplicado.
         if scan_repo.has_applied_result(scan_image_id):
             log.info("scan.reprocess_not_reapplied", scan_image_id=scan_image_id)
-            return False
+            return False, result.id
 
         key = CollectionKey(
             card_id=match_result.card_id,
@@ -421,4 +544,4 @@ class ScanService:
         )
         item = collection_repo.add_copies(key, 1, source="scan")
         scan_repo.mark_applied(result, item.id)
-        return True
+        return True, result.id

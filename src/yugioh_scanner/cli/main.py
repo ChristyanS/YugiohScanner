@@ -17,7 +17,8 @@ from .. import __version__
 from ..config import get_settings
 from ..errors import YugiohScannerError
 from ..logging_setup import configure_logging
-from . import db_cmd, scan_cmd, sync_cmd
+from . import collection_cmd, db_cmd, review_cmd, scan_cmd, sync_cmd
+from .errors import handle_errors
 from .render import fail, print_json, print_key_values
 
 app = typer.Typer(
@@ -29,12 +30,15 @@ app = typer.Typer(
 )
 
 app.add_typer(db_cmd.app, name="db")
+app.add_typer(collection_cmd.app, name="collection")
 
 # Comandos de topo: são o fluxo de uso normal, não manutenção.
 app.command("init")(sync_cmd.init_command)
 app.command("sync")(sync_cmd.sync_command)
 app.command("check-updates")(sync_cmd.check_command)
 app.command("scan")(scan_cmd.scan_command)
+app.command("scan-status")(scan_cmd.scan_status_command)
+app.command("review")(review_cmd.review_command)
 
 
 def _version_callback(value: bool) -> None:
@@ -65,6 +69,7 @@ def main(
 
 
 @app.command("config")
+@handle_errors
 def config_cmd(
     action: str = typer.Argument("show", help="Apenas 'show' por enquanto."),
     as_json: bool = typer.Option(False, "--json", help="Saída em JSON."),

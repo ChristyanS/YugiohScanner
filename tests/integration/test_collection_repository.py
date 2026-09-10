@@ -163,6 +163,26 @@ class TestSetPrint:
         updated = repo.set_print(item.id, card_print.id)
         assert updated.card_print_id == card_print.id
 
+    def test_the_relationship_is_synced_not_just_the_foreign_key(self, session: Session) -> None:
+        """Regressão: `card_print_id` sozinho não resincroniza `.card_print`.
+
+        A relação é `lazy="joined"` e já tinha sido carregada como `None`
+        (o item nasceu sem print). Sem um refresh explícito, o objeto Python
+        continua mostrando `card_print=None` mesmo com a FK já gravada —
+        um `list()` novo mascararia isso (consulta fresca), então o teste
+        lê exatamente o mesmo objeto que `set_print` devolveu.
+        """
+        card = make_card(session)
+        card_print = make_print(session, card, "LOB-001")
+        repo = CollectionRepository(session)
+        item = repo.add_copies(CollectionKey(card_id=card.id), 1)
+        assert item.card_print is None
+
+        updated = repo.set_print(item.id, card_print.id)
+
+        assert updated.card_print is not None
+        assert updated.card_print.set_code_full == "LOB-001"
+
     def test_merges_into_an_existing_item_with_the_same_print(self, session: Session) -> None:
         """Resolver o set não pode violar a unicidade — funde em vez de duplicar."""
         card = make_card(session)

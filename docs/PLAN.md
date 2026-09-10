@@ -653,6 +653,14 @@ Os limiares vivem em `Settings` (`CONFIDENCE_AUTO`, `CONFIDENCE_REVIEW`) e serã
 yugioh-scanner [--config PATH] [--log-level LEVEL] [--json] COMANDO
 ```
 
+> **Desvio implementado (Fase 6):** o plano original agrupava `scan review` e
+> `scan status` como subcomandos de `scan`. No Typer/Click um comando não pode
+> ser ao mesmo tempo um grupo com subcomandos e receber um argumento
+> posicional livre — `scan PASTA` já usa `PASTA` assim, e virar grupo faria o
+> Click tentar interpretar `./pasta` como nome de subcomando. Implementados
+> como comandos de topo equivalentes: `yugioh-scanner review` e
+> `yugioh-scanner scan-status`. Mesma função, nome de invocação diferente.
+
 ### Banco e catálogo
 
 | Comando | Descrição |
@@ -1067,7 +1075,7 @@ Formato verificado byte a byte contra exports reais do usuário (§0.4). Mapeame
 | `sealed`,`signed`,`altered` | — | sempre `false` (não rastreamos) |
 | demais 12 colunas | — | sempre vazias (sem equivalente no nosso modelo: `art_variant`, `variant_label`, `storage_location`, `grading_company`, `grade`, `certification_number`, `subgrade_*` ×4, `source`, `purchase_price`, `market_value_override`) |
 
-Formato de arquivo: CSV com `utf-8-sig` (grava o BOM) e `
+Formato de arquivo: CSV com `utf-8-sig` (grava o BOM) e `
 `, exatamente como o export real. TXT: `<quantidade> <nome>` por tipo de carta, sem cabeçalho.
 
 ---

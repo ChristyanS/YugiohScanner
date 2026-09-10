@@ -14,6 +14,7 @@ usa `COALESCE(card_print_id, -1)`.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any, ClassVar
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -27,6 +28,7 @@ from ..db.tables import (
     CollectionItem,
     utcnow,
 )
+from ..domain.normalization import normalize_strict
 from ..errors import CollectionItemNotFoundError
 
 
@@ -203,6 +205,12 @@ class CollectionRepository:
         item.card_print_id = card_print_id
         item.updated_at = utcnow()
         self.session.flush()
+        # Regressão: `flush()` grava a coluna FK, mas a relação `card_print`
+        # (lazy="joined") **não** se resincroniza sozinha — ela já tinha sido
+        # carregada como None antes deste método rodar. Sem o refresh, quem
+        # lê `item.card_print` logo em seguida (mesma sessão) via o cache
+        # antigo, mesmo com a FK já correta no banco.
+        self.session.refresh(item, attribute_names=["card_print"])
         return item
 
     # ----------------------------------------------------------------- busca p/ CLI
@@ -219,3 +227,51 @@ class CollectionRepository:
 
     def prints_for_card(self, card_id: int) -> list[CardPrint]:
         return list(self.session.scalars(select(CardPrint).where(CardPrint.card_id == card_id)))
+
+    #: Colunas aceitas por `--sort` em `collection list` (plano §8).
+    SORT_COLUMNS: ClassVar[dict[str, Any]] = {
+        "name": Card.name,
+        "quantity": CollectionItem.quantity,
+        "added": CollectionItem.added_at,
+        "set": CardPrint.set_code_full,
+    }
+
+    def list_filtered(
+        self,
+        *,
+        search: str | None = None,
+        set_prefix: str | None = None,
+        no_set: bool = False,
+        sort: str = "name",
+        descending: bool = False,
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> list[CollectionItem]:
+        """Consulta filtrada para `collection list` — a única tela que
+        precisa de busca, filtro e ordenação simultâneos (plano §11)."""
+        # `.outerjoin(CardPrint)` sozinho é ambíguo assim que `Card` já está na
+        # query: o SQLAlchemy pode escolher `CardPrint.card_id == Card.id`
+        # (TODOS os prints da carta) em vez de
+        # `CollectionItem.card_print_id == CardPrint.id` (o print específico
+        # deste item) — e ele escolhe a opção errada aqui, porque `card` foi
+        # a tabela mais recentemente unida. O sintoma são duas facetas do
+        # mesmo bug: `--limit` cortava linhas duplicadas pela metade, e um
+        # filtro `--set` batia se a carta tivesse *qualquer* print naquele
+        # set, não o print que o item realmente tem. Usar a relação
+        # (`CollectionItem.card_print`) força o caminho de FK certo.
+        stmt = select(CollectionItem).join(Card).outerjoin(CollectionItem.card_print)
+
+        if search:
+            stmt = stmt.where(Card.name_normalized.contains(normalize_strict(search)))
+        if set_prefix:
+            stmt = stmt.where(CardPrint.set_prefix == set_prefix.strip().upper())
+        if no_set:
+            stmt = stmt.where(CollectionItem.card_print_id.is_(None))
+
+        column = self.SORT_COLUMNS.get(sort, Card.name)
+        stmt = stmt.order_by(column.desc() if descending else column.asc())
+
+        if limit is not None:
+            stmt = stmt.limit(limit).offset(offset)
+
+        return list(self.session.scalars(stmt).unique())

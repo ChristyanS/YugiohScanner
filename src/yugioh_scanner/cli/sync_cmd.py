@@ -17,6 +17,7 @@ from ..db.engine import database_exists, engine_from_settings
 from ..db.migrations import backup_database, current_revision, upgrade_to_head
 from ..services.sync_service import SyncReport
 from .context import sync_service
+from .errors import handle_errors
 from .render import ARROW, console, hint, print_json, print_key_values, success, warn
 
 
@@ -96,6 +97,7 @@ def _report(report: SyncReport, as_json: bool) -> None:
             )
 
 
+@handle_errors
 def init_command(
     force: bool = typer.Option(False, "--force", help="Recria o banco do zero (faz backup antes)."),
     skip_sync: bool = typer.Option(
@@ -133,6 +135,7 @@ def init_command(
     _report(_run_sync(force=False, sets_only=False, quiet=as_json), as_json)
 
 
+@handle_errors
 def sync_command(
     force: bool = typer.Option(
         False, "--force", help="Sincroniza mesmo que a versão remota não tenha mudado."
@@ -150,6 +153,7 @@ def sync_command(
     _report(_run_sync(force=force, sets_only=sets_only, quiet=as_json), as_json)
 
 
+@handle_errors
 def check_command(
     as_json: bool = typer.Option(False, "--json", help="Saída em JSON."),
 ) -> None:

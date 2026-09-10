@@ -59,7 +59,13 @@ EDITIONS = ("1st Edition", "Unlimited", "Limited")
 COLLECTION_SOURCES = ("scan", "manual", "import")
 SCAN_JOB_STATUSES = ("running", "done", "failed", "cancelled")
 SCAN_IMAGE_STATUSES = ("pending", "ok", "ocr_empty", "invalid", "error")
-SCAN_DECISIONS = ("auto", "pending", "confirmed", "rejected", "unmatched")
+#: As quatro primeiras vêm de `domain.confidence.Decision` (a política de
+#: confiança nunca decide "confirmed"/"rejected" — são estados que só existem
+#: depois de revisão humana, plano §12). Bug real da Fase 1: esta lista não
+#: incluía "manual", e qualquer carta ambígua ou de baixa confiança — o caso
+#: mais comum de precisar revisão — quebrava o scan com IntegrityError ao
+#: tentar persistir o `ScanResult`. Corrigido na migração 0002.
+SCAN_DECISIONS = ("auto", "pending", "manual", "confirmed", "rejected", "unmatched")
 
 DEFAULT_CONDITION = "Near Mint"
 DEFAULT_EDITION = "Unlimited"

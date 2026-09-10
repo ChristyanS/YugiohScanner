@@ -16,6 +16,8 @@ from ..config import Settings, get_settings
 from ..db.engine import database_exists, engine_from_settings
 from ..db.migrations import is_up_to_date
 from ..db.session import Database
+from ..services.collection_service import CollectionService
+from ..services.scan_service import ScanService
 from ..services.sync_service import SyncService
 from ..ygoprodeck.client import YgoProDeckClient
 from .render import fail, hint
@@ -54,4 +56,34 @@ def sync_service(settings: Settings | None = None) -> Iterator[SyncService]:
         yield SyncService(database, client, settings)
     finally:
         client.close()
+        database.dispose()
+
+
+def scan_service(settings: Settings | None = None) -> tuple[ScanService, Database]:
+    """`ScanService` pronto. O chamador é responsável por `database.dispose()`.
+
+    Diferente de `sync_service`/`collection_service`, `ScanService` abre e
+    fecha suas próprias sessões por chamada (plano §5.1 — precisa orquestrar
+    OCR em paralelo entre múltiplas operações de banco), então não há uma
+    única sessão para gerir aqui.
+    """
+    settings = settings or get_settings()
+    database = require_database(settings)
+    return ScanService(database, settings), database
+
+
+@contextmanager
+def collection_service(settings: Settings | None = None) -> Iterator[CollectionService]:
+    """`CollectionService` pronto, com sessão e commit/rollback geridos.
+
+    A sessão fica aberta por toda a duração do bloco `with` de quem chama —
+    é por isso que ler `item.card`/`item.card_print` funciona sem
+    `DetachedInstanceError` dentro do comando, mas não depois dele.
+    """
+    settings = settings or get_settings()
+    database = require_database(settings)
+    try:
+        with database.session() as session:
+            yield CollectionService(session)
+    finally:
         database.dispose()

@@ -112,6 +112,33 @@ class OcrProviderUnavailableError(OcrProviderError):
         )
 
 
+class ScanResultNotFoundError(ScanError):
+    """Nenhum resultado de scan com o ID pedido."""
+
+    def __init__(self, result_id: int) -> None:
+        super().__init__(f"Resultado de scan #{result_id} não encontrado.")
+        self.result_id = result_id
+
+
+class ScanResultAlreadyAppliedError(ScanError):
+    """Esta leitura já contribuiu para a coleção — confirmar de novo duplicaria."""
+
+    def __init__(self, result_id: int) -> None:
+        super().__init__(
+            f"O resultado #{result_id} já foi aplicado à coleção anteriormente.",
+            hint="Nada a fazer: a cópia já está contabilizada.",
+        )
+        self.result_id = result_id
+
+
+class JobNotFoundError(ScanError):
+    """Nenhum job de scan com o ID pedido."""
+
+    def __init__(self, job_id: int) -> None:
+        super().__init__(f"Job de scan #{job_id} não encontrado.")
+        self.job_id = job_id
+
+
 # ---------------------------------------------------------------- coleção
 
 
