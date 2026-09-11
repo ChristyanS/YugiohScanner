@@ -23,6 +23,8 @@
       <ul id="manual-search-results" class="candidate-list"></ul>
     </details>
 
+    <p id="selected-label" class="selected-label"></p>
+
     <div id="print-section" hidden>
       <label>Set
         <select id="print-select"></select>
@@ -64,6 +66,7 @@ const errorBox = document.getElementById("review-error");
 const manualSearchDetails = document.getElementById("manual-search");
 const manualSearchInput = document.getElementById("manual-search-input");
 const manualSearchResults = document.getElementById("manual-search-results");
+const selectedLabel = document.getElementById("selected-label");
 let manualSearchTimer = null;
 
 function showError(message) {
@@ -103,6 +106,7 @@ function render() {
   manualSearchDetails.open = false;
   manualSearchInput.value = "";
   manualSearchResults.innerHTML = "";
+  selectedLabel.textContent = "";
 
   candidatesEl.innerHTML = "";
   (r.candidates || []).slice(0, 5).forEach((c, i) => {
@@ -116,11 +120,17 @@ function render() {
   if (r.candidates && r.candidates.length) selectCandidate(0);
 }
 
+function clearSelectionHighlight() {
+  [...candidatesEl.children].forEach((li) => li.classList.remove("selected"));
+  [...manualSearchResults.children].forEach((li) => li.classList.remove("selected"));
+}
+
 async function selectCandidate(i) {
   const r = current();
   const c = (r.candidates || [])[i];
   if (!c) return;
-  [...candidatesEl.children].forEach((li, idx) => li.classList.toggle("selected", idx === i));
+  clearSelectionHighlight();
+  candidatesEl.children[i].classList.add("selected");
   // Só o candidato do topo-5 que já é a carta escolhida pelo motor carrega o
   // set detectado pelo código (plano §7.4) — qualquer outro (troca de
   // candidato ou busca manual) começa sem set, para não sugerir um print de
@@ -129,15 +139,21 @@ async function selectCandidate(i) {
   await selectCard(c.card_id, c, autoPrintId);
 }
 
-async function selectManualCard(card) {
+async function selectManualCard(card, li) {
   const r = current();
-  [...candidatesEl.children].forEach((li) => li.classList.remove("selected"));
+  clearSelectionHighlight();
+  li.classList.add("selected");
   const autoPrintId = card.id === r.card_id ? r.card_print_id : null;
   await selectCard(card.id, { card_id: card.id, name: card.name, score: null }, autoPrintId);
 }
 
 async function selectCard(cardId, candidate, autoPrintId) {
   selectedCandidate = candidate;
+  // Feedback visível: sem isto, escolher um resultado da busca manual não
+  // muda nada acima da dobra (o destaque fica só na lista, que pode já estar
+  // fora da vista) e parece que o clique não fez nada (achado real do
+  // usuário: "clico e não consigo escolher a carta").
+  selectedLabel.textContent = `Selecionado: ${candidate.name}`;
 
   const res = await fetch(`/api/v1/cards/${cardId}`);
   const card = await res.json();
@@ -167,7 +183,7 @@ async function runManualSearch(query) {
     const li = document.createElement("li");
     li.innerHTML = `<img class="thumb" src="/api/v1/cards/${card.id}/image?size=small" loading="lazy" alt="">
       <strong>${card.name}</strong>`;
-    li.addEventListener("click", () => selectManualCard(card));
+    li.addEventListener("click", () => selectManualCard(card, li));
     manualSearchResults.appendChild(li);
   });
 }

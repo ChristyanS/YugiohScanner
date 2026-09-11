@@ -26,7 +26,11 @@
       "Bash(curl -s \"http://127.0.0.1:8000/api/v1/cards?q=Baron%20of%20the%20Fiend%20Sword&limit=5\")",
       "Bash(curl -s -X POST http://127.0.0.1:8000/api/v1/scan-results/33/confirm -H 'Content-Type: application/json' -d '{\"card_id\": 86325596, \"card_print_id\": null, \"quantity\": 1}')",
       "Bash(.venv/Scripts/python.exe -c \"import json,sys; print\\('pending now:', len\\(json.load\\(sys.stdin\\)\\)\\)\")",
-      "Bash(.venv/Scripts/python.exe -m pytest -q)"
+      "Bash(.venv/Scripts/python.exe -m pytest -q)",
+      "Bash(git check-ignore *)",
+      "Bash(.venv/Scripts/python.exe -c \"import playwright; print\\('playwright available'\\)\")",
+      "Bash(.venv/Scripts/python.exe -c \"import selenium; print\\('selenium available'\\)\")",
+      "Bash(pip list *)"
     ]
   }
 }

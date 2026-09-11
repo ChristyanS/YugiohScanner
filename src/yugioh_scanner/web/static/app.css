@@ -83,6 +83,11 @@
   background: color-mix(in srgb, var(--pico-primary) 8%, transparent);
 }
 
+.selected-label {
+  font-weight: 600;
+  color: var(--pico-primary);
+}
+
 .kbd-hint {
   color: var(--pico-muted-color);
   font-size: 0.85rem;
