@@ -3,7 +3,8 @@
     "allow": [
       "Bash(python -c ' *)",
       "Bash(curl -s http://127.0.0.1:8000/ --max-time 5)",
-      "Bash(git add *)"
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)"
     ]
   }
 }

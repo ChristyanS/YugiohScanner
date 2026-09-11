@@ -27,10 +27,19 @@ REGION_FULL = "full"
 
 @dataclass(frozen=True, slots=True)
 class TextLine:
-    """Uma linha de texto reconhecida, com a confiança que o motor reportou."""
+    """Uma linha de texto reconhecida, com a confiança que o motor reportou.
+
+    `x`: posição horizontal (borda esquerda, em pixels da região) — existe só
+    para `OCRResult.joined()` conseguir concatenar em ordem de leitura.
+    Nenhum provider garante que devolve as caixas já em ordem (o RapidOCR, em
+    particular, devolve na ordem interna de detecção, não da esquerda para a
+    direita — verificado numa foto real onde o nome saiu embaralhado sem
+    isto: plano §9, Fase 9).
+    """
 
     text: str
     confidence: float = 1.0
+    x: float = 0.0
 
     def as_dict(self) -> dict[str, Any]:
         return {"text": self.text, "confidence": round(self.confidence, 4)}
@@ -70,8 +79,15 @@ class OCRResult:
         return max(lines, key=lambda line: line.confidence).text
 
     def joined(self, region: str, separator: str = " ") -> str:
-        """Todas as linhas da região, na ordem em que o motor as devolveu."""
-        return separator.join(line.text for line in self.texts.get(region, ()) if line.text)
+        """Todas as linhas da região, em ordem de leitura (esquerda→direita).
+
+        Reordena por `TextLine.x` — nenhum provider garante devolver as
+        caixas já nessa ordem (achado real da Fase 9: o RapidOCR embaralhava
+        nomes com mais de uma caixa detectada). `sorted` é estável, então
+        providers que não preenchem `x` (fica 0.0) mantêm a ordem original.
+        """
+        lines = sorted(self.texts.get(region, ()), key=lambda line: line.x)
+        return separator.join(line.text for line in lines if line.text)
 
     def confidence(self, region: str) -> float:
         """Confiança média da região — entra no score final (plano §7.4)."""

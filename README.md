@@ -24,12 +24,17 @@ atual do sistema), [`docs/adr/`](docs/adr/) (decisões individuais) e
 | 10 | Fallback por LLM Vision (opcional) | ⬜ |
 | 11 | Empacotamento e documentação | 🟡 parcial² |
 
-¹ Performance (§20.5) e cobertura (§19.5) medidas e documentadas — números
-reais no plano. A calibração de confiança em si (`CONFIDENCE_AUTO`/
-`CONFIDENCE_REVIEW` contra fotos reais) está **bloqueada**: precisa de 15–25
-fotos suas (`tests/fixtures/cards/`, ver o README lá) que ainda não existem
-no repositório — nada foi inventado no lugar delas. Ferramenta pronta
-(`scripts/calibrate_thresholds.py`); ver `docs/adr/0001-limiares-de-confianca.md`.
+¹ Performance (§20.5) e cobertura (§19.5) medidas e documentadas. Calibração
+de confiança **medida contra 20 fotos reais** (2026-09-11) — resultado:
+**40% de acerto top-1 do nome** (meta ≥80%), causa raiz identificada (leitura
+degradada em fotos tiradas através de plástico de álbum, não carta solta
+sobre fundo liso). Um bug real de ordenação de texto no OCR foi encontrado e
+corrigido no processo. Limiares de confiança **não mudaram** — a calibração
+mostrou que o problema é a leitura, não o limiar, e que a política atual já
+não deixa nenhuma leitura ruim entrar sozinha na coleção. Detalhes completos:
+`docs/adr/0001-limiares-de-confianca.md` e `tests/fixtures/cards/README.md`.
+Ainda pendente: fotos de controle (carta solta, fundo liso) para isolar a
+causa com mais confiança.
 
 ² README, `docs/architecture.md` e 8 ADRs (`docs/adr/`) prontos. O
 `Dockerfile` foi escrito mas **não verificado**: o ambiente onde foi criado

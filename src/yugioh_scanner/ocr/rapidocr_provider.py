@@ -88,7 +88,14 @@ class RapidOCRProvider(BaseOCRProvider):
                 confidence = float(entry[2]) if len(entry) > 2 else 1.0
             except (TypeError, ValueError):
                 confidence = 1.0
-            lines.append(TextLine(text=text, confidence=confidence))
+            # `entry[0]` é o quadrilátero da caixa (4 pontos [x, y]); a borda
+            # esquerda vira a chave de ordenação de `OCRResult.joined()` — o
+            # RapidOCR não garante devolver as caixas em ordem de leitura.
+            try:
+                x = min(float(point[0]) for point in entry[0])
+            except (TypeError, ValueError, IndexError):
+                x = 0.0
+            lines.append(TextLine(text=text, confidence=confidence, x=x))
         return tuple(lines)
 
 

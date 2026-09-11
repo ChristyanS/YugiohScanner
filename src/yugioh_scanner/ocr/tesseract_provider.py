@@ -70,7 +70,9 @@ class TesseractProvider(BaseOCRProvider):
             image, config=config, output_type=self._pytesseract.Output.DICT
         )
         lines: list[TextLine] = []
-        for text, raw_confidence in zip(data["text"], data["conf"], strict=False):
+        for text, raw_confidence, left in zip(
+            data["text"], data["conf"], data["left"], strict=False
+        ):
             cleaned = str(text).strip()
             if not cleaned:
                 continue
@@ -79,7 +81,11 @@ class TesseractProvider(BaseOCRProvider):
                 confidence = max(0.0, float(raw_confidence)) / 100.0
             except (TypeError, ValueError):
                 confidence = 0.0
-            lines.append(TextLine(text=cleaned, confidence=confidence))
+            try:
+                x = float(left)
+            except (TypeError, ValueError):
+                x = 0.0
+            lines.append(TextLine(text=cleaned, confidence=confidence, x=x))
         return tuple(lines)
 
 
