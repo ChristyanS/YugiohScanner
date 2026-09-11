@@ -17,10 +17,17 @@
     <h3>Candidatos</h3>
     <ul id="candidates" class="candidate-list"></ul>
 
+    <details id="manual-search">
+      <summary>Nenhum candidato é a carta certa? Buscar manualmente</summary>
+      <input type="search" id="manual-search-input" placeholder="Nome da carta...">
+      <ul id="manual-search-results" class="candidate-list"></ul>
+    </details>
+
     <div id="print-section" hidden>
       <label>Set
         <select id="print-select"></select>
       </label>
+      <small id="print-auto-hint" hidden>Set detectado automaticamente pelo código lido.</small>
     </div>
 
     <label>Quantidade
@@ -51,8 +58,13 @@ const ocrCode = document.getElementById("ocr-code");
 const candidatesEl = document.getElementById("candidates");
 const printSection = document.getElementById("print-section");
 const printSelect = document.getElementById("print-select");
+const printAutoHint = document.getElementById("print-auto-hint");
 const quantityInput = document.getElementById("quantity");
 const errorBox = document.getElementById("review-error");
+const manualSearchDetails = document.getElementById("manual-search");
+const manualSearchInput = document.getElementById("manual-search-input");
+const manualSearchResults = document.getElementById("manual-search-results");
+let manualSearchTimer = null;
 
 function showError(message) {
   errorBox.innerHTML = message ? `<div class="error-box">${message}</div>` : "";
@@ -88,6 +100,9 @@ function render() {
   selectedPrint = null;
   printSection.hidden = true;
   printSelect.innerHTML = "";
+  manualSearchDetails.open = false;
+  manualSearchInput.value = "";
+  manualSearchResults.innerHTML = "";
 
   candidatesEl.innerHTML = "";
   (r.candidates || []).slice(0, 5).forEach((c, i) => {
@@ -105,18 +120,63 @@ async function selectCandidate(i) {
   const r = current();
   const c = (r.candidates || [])[i];
   if (!c) return;
-  selectedCandidate = c;
   [...candidatesEl.children].forEach((li, idx) => li.classList.toggle("selected", idx === i));
+  // Só o candidato do topo-5 que já é a carta escolhida pelo motor carrega o
+  // set detectado pelo código (plano §7.4) — qualquer outro (troca de
+  // candidato ou busca manual) começa sem set, para não sugerir um print de
+  // outra carta.
+  const autoPrintId = c.card_id === r.card_id ? r.card_print_id : null;
+  await selectCard(c.card_id, c, autoPrintId);
+}
 
-  const res = await fetch(`/api/v1/cards/${c.card_id}`);
+async function selectManualCard(card) {
+  const r = current();
+  [...candidatesEl.children].forEach((li) => li.classList.remove("selected"));
+  const autoPrintId = card.id === r.card_id ? r.card_print_id : null;
+  await selectCard(card.id, { card_id: card.id, name: card.name, score: null }, autoPrintId);
+}
+
+async function selectCard(cardId, candidate, autoPrintId) {
+  selectedCandidate = candidate;
+
+  const res = await fetch(`/api/v1/cards/${cardId}`);
   const card = await res.json();
   printSelect.innerHTML = '<option value="">(set indefinido)</option>' +
     card.prints.map(p => `<option value="${p.id}">${p.set_code} — ${p.rarity || "?"}</option>`).join("");
   printSection.hidden = false;
-  printSelect.value = "";
-  selectedPrint = null;
-  printSelect.onchange = () => { selectedPrint = printSelect.value || null; };
+  const auto = autoPrintId ? String(autoPrintId) : "";
+  printSelect.value = auto;
+  selectedPrint = auto || null;
+  printAutoHint.hidden = !auto;
+  printSelect.onchange = () => {
+    selectedPrint = printSelect.value || null;
+    printAutoHint.hidden = true;
+  };
 }
+
+async function runManualSearch(query) {
+  if (!query.trim()) { manualSearchResults.innerHTML = ""; return; }
+  const res = await fetch(`/api/v1/cards?q=${encodeURIComponent(query)}&limit=10`);
+  const cards = await res.json();
+  manualSearchResults.innerHTML = "";
+  if (!cards.length) {
+    manualSearchResults.innerHTML = "<li><em>Nenhuma carta encontrada.</em></li>";
+    return;
+  }
+  cards.forEach((card) => {
+    const li = document.createElement("li");
+    li.innerHTML = `<img class="thumb" src="/api/v1/cards/${card.id}/image?size=small" loading="lazy" alt="">
+      <strong>${card.name}</strong>`;
+    li.addEventListener("click", () => selectManualCard(card));
+    manualSearchResults.appendChild(li);
+  });
+}
+
+manualSearchInput.addEventListener("input", () => {
+  clearTimeout(manualSearchTimer);
+  const query = manualSearchInput.value;
+  manualSearchTimer = setTimeout(() => runManualSearch(query), 300);
+});
 
 async function confirmCurrent() {
   const r = current();
@@ -143,7 +203,16 @@ async function rejectCurrent() {
   advance();
 }
 
-function skipCurrent() { index = Math.min(index + 1, queue.length); render(); }
+function skipCurrent() {
+  // Pular não remove da fila (diferente de confirmar/rejeitar) — só avança o
+  // ponteiro, então precisa dar a volta em vez de sair do array (bug real:
+  // `Math.min(index + 1, queue.length)` podia apontar para o índice
+  // `queue.length`, que não existe, e `current()` devolvia `undefined` —
+  // travava a página no acesso seguinte a `r.image.id`).
+  if (!queue.length) return;
+  index = (index + 1) % queue.length;
+  render();
+}
 
 function advance() {
   queue.splice(index, 1);
@@ -157,6 +226,7 @@ document.getElementById("btn-reject").addEventListener("click", rejectCurrent);
 
 document.addEventListener("keydown", (e) => {
   if (body.hidden) return;
+  if (e.target === manualSearchInput) return; // digitar/Enter na busca não deve disparar atalhos
   if (e.target.tagName === "SELECT" || e.target.tagName === "INPUT") {
     if (e.key !== "Enter") return;
   }

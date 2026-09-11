@@ -4,7 +4,29 @@
       "Bash(python -c ' *)",
       "Bash(curl -s http://127.0.0.1:8000/ --max-time 5)",
       "Bash(git add *)",
-      "Bash(git commit -m ' *)"
+      "Bash(git commit -m ' *)",
+      "Bash(git push *)",
+      "Bash(python -m pytest tests/integration/test_web_html.py tests/integration/test_web_api.py -q)",
+      "Bash(python -c \"import sys; print\\(sys.executable\\)\")",
+      "Bash(.venv/Scripts/python.exe -m pytest tests/integration/test_web_html.py tests/integration/test_web_api.py -q)",
+      "Bash(.venv/Scripts/python.exe -c ' *)",
+      "Bash(.venv/Scripts/python.exe -m yugioh_scanner.cli scan tests/fixtures/cards --auto)",
+      "Bash(nohup .venv/Scripts/yugioh-scanner.exe serve)",
+      "Bash(echo \"started pid $!\")",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" http://127.0.0.1:8000/review)",
+      "Read(//tmp/**)",
+      "Bash(curl -s http://127.0.0.1:8000/review)",
+      "Bash(curl -s \"http://127.0.0.1:8000/api/v1/scan-results?decision=pending&limit=200\")",
+      "Bash(curl -s \"http://127.0.0.1:8000/api/v1/cards?q=Dark%20Magician&limit=5\")",
+      "Bash(.venv/Scripts/python.exe -m json.tool)",
+      "Bash(curl -s \"http://127.0.0.1:8000/api/v1/cards/46986414\")",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" \"http://127.0.0.1:8000/api/v1/cards/46986414/image?size=small\")",
+      "Bash(ps -W)",
+      "Bash(curl -s \"http://127.0.0.1:8000/api/v1/scan-results/33\")",
+      "Bash(curl -s \"http://127.0.0.1:8000/api/v1/cards?q=Baron%20of%20the%20Fiend%20Sword&limit=5\")",
+      "Bash(curl -s -X POST http://127.0.0.1:8000/api/v1/scan-results/33/confirm -H 'Content-Type: application/json' -d '{\"card_id\": 86325596, \"card_print_id\": null, \"quantity\": 1}')",
+      "Bash(.venv/Scripts/python.exe -c \"import json,sys; print\\('pending now:', len\\(json.load\\(sys.stdin\\)\\)\\)\")",
+      "Bash(.venv/Scripts/python.exe -m pytest -q)"
     ]
   }
 }
