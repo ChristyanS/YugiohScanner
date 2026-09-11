@@ -74,6 +74,30 @@ def search_card_ids(session: Session, query: str, *, limit: int = 50) -> list[in
     return list(rows)
 
 
+#: Índice sobre `card_alt_name` (nomes em FR/DE/IT/PT — plano §7.1
+#: multilíngue). Tabela separada de `card_fts`: uma carta pode ter várias
+#: linhas (uma por idioma), o que uma FTS5 de conteúdo externo não permite.
+ALT_FTS_TABLE = "card_alt_fts"
+
+
+def search_alt_card_ids(session: Session, query: str, *, limit: int = 50) -> list[int]:
+    """IDs de carta (não rowid — `card_alt_fts` guarda `card_id` à parte,
+    porque seu rowid é o de `card_alt_name`, não o da carta) que casam com o
+    texto via nome alternativo, ordenados por relevância (bm25).
+    """
+    safe = sanitize_fts_query(query)
+    if not safe:
+        return []
+    rows = session.execute(
+        text(
+            f"SELECT card_id FROM {ALT_FTS_TABLE} "
+            f"WHERE {ALT_FTS_TABLE} MATCH :q ORDER BY bm25({ALT_FTS_TABLE}) LIMIT :limit"
+        ),
+        {"q": safe, "limit": limit},
+    ).scalars()
+    return list(rows)
+
+
 def rebuild_fts(engine: Engine) -> None:
     """Reconstrói o índice a partir da tabela `card`.
 

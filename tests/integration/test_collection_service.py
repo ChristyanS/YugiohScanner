@@ -48,8 +48,14 @@ class TestAddManual:
         assert item.quantity == 5
 
     def test_unknown_name_raises(self, service: CollectionService) -> None:
+        # Não uma frase em português: o catálogo compartilhado agora tem
+        # nomes alternativos em PT (plano §7.1 multilíngue), e uma frase
+        # real nesse idioma corre o risco de um WRatio alto por coincidência
+        # de vocabulário — não por ser parecida com o nome de alguma carta.
+        # Tokens sem sentido em nenhum idioma testam a mesma coisa sem esse
+        # ruído.
         with pytest.raises(CardNotFoundError):
-            service.add_manual("carta que nao existe de jeito nenhum xyzzy")
+            service.add_manual("zxqvw plonk blaster 9999")
 
     def test_set_code_resolves_the_print(self, service: CollectionService) -> None:
         item = service.add_manual("Dark Magician", set_code="SDK-001")

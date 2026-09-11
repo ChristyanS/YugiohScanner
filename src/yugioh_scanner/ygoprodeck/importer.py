@@ -22,7 +22,7 @@ from typing import Any
 from sqlalchemy import insert, select, update
 from sqlalchemy.orm import Session
 
-from ..db.tables import Card, CardImage, CardPrint, CardSet, utcnow
+from ..db.tables import Card, CardAltName, CardImage, CardPrint, CardSet, utcnow
 from ..domain.normalization import normalize_strict
 from ..domain.setcode import parse_set_code
 from ..logging_setup import get_logger
@@ -49,6 +49,9 @@ class ImportStats:
     prints_updated: int = 0
     #: Prints que existem no banco mas sumiram da API. Preservados de propósito.
     prints_stale: int = 0
+    #: Nomes alternativos (FR/DE/IT/PT), plano §7.1 multilíngue.
+    alt_names_inserted: int = 0
+    alt_names_updated: int = 0
     unparsed_set_codes: list[str] = field(default_factory=list)
 
     def merge(self, other: ImportStats) -> None:
@@ -61,6 +64,8 @@ class ImportStats:
         self.prints_inserted += other.prints_inserted
         self.prints_updated += other.prints_updated
         self.prints_stale += other.prints_stale
+        self.alt_names_inserted += other.alt_names_inserted
+        self.alt_names_updated += other.alt_names_updated
         self.unparsed_set_codes.extend(other.unparsed_set_codes)
 
     def as_dict(self) -> dict[str, int]:
@@ -74,6 +79,8 @@ class ImportStats:
             "prints_inserted": self.prints_inserted,
             "prints_updated": self.prints_updated,
             "prints_stale": self.prints_stale,
+            "alt_names_inserted": self.alt_names_inserted,
+            "alt_names_updated": self.alt_names_updated,
         }
 
 
@@ -118,6 +125,21 @@ def card_row(api_card: ApiCard, now: Any) -> dict[str, Any]:
         "konami_id": misc.konami_id if misc else None,
         "has_effect": bool(misc.has_effect) if misc and misc.has_effect is not None else False,
         "ygoprodeck_url": api_card.ygoprodeck_url,
+        "synced_at": now,
+    }
+
+
+def alt_name_row(api_card: ApiCard, language: str, now: Any) -> dict[str, Any]:
+    """Uma linha de `card_alt_name` — mesma normalização do nome canônico.
+
+    `api_card.id` é o passcode, igual em todo idioma (verificado ao vivo
+    contra a API): não precisa de mapeamento, só a chave estrangeira direta.
+    """
+    return {
+        "card_id": api_card.id,
+        "language": language,
+        "name": api_card.name,
+        "name_normalized": normalize_strict(api_card.name),
         "synced_at": now,
     }
 
@@ -257,6 +279,50 @@ class CatalogImporter:
         self._import_card_rows(api_cards, card_ids, now, stats)
         self._import_images(api_cards, card_ids, stats)
         self._import_prints(api_cards, card_ids, known_prefixes, now, stats)
+        return stats
+
+    # ---------------------------------------------------------- nomes alternativos
+
+    def import_alt_names(self, api_cards: Sequence[ApiCard], language: str) -> ImportStats:
+        """Importa um lote de nomes traduzidos (`api_cards` já veio filtrado
+        por `language` na chamada à API — plano §7.1 multilíngue).
+
+        Chave lógica `(card_id, language)`, a mesma de `ux_card_alt_name`.
+        Assume que a carta em si já existe (o passo em inglês roda primeiro,
+        na mesma transação de sync) — um `card_id` órfão aqui é erro de dado
+        real, não caso a silenciar, e a FK rejeita.
+        """
+        stats = ImportStats()
+        if not api_cards:
+            return stats
+
+        now = utcnow()
+        rows = [alt_name_row(card, language, now) for card in api_cards]
+
+        existing = {
+            row.card_id: row.id
+            for row in self.session.execute(
+                select(CardAltName.id, CardAltName.card_id).where(
+                    CardAltName.language == language,
+                    CardAltName.card_id.in_(card.id for card in api_cards),
+                )
+            )
+        }
+
+        to_insert = [row for row in rows if row["card_id"] not in existing]
+        to_update = [
+            {**row, "id": existing[row["card_id"]]}
+            for row in rows
+            if row["card_id"] in existing
+        ]
+
+        for batch in _chunks(to_insert):
+            self.session.execute(insert(CardAltName), batch)
+        for batch in _chunks(to_update):
+            self.session.execute(update(CardAltName), batch)
+
+        stats.alt_names_inserted = len(to_insert)
+        stats.alt_names_updated = len(to_update)
         return stats
 
     def _import_card_rows(

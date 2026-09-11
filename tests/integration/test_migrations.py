@@ -21,6 +21,7 @@ from yugioh_scanner.db.tables import Base
 
 EXPECTED_TABLES = {
     "card",
+    "card_alt_name",
     "card_image",
     "card_set",
     "card_print",
@@ -84,6 +85,16 @@ class TestHandWrittenObjects:
         assert "card_fts" in objects
         assert {"card_fts_ai", "card_fts_ad", "card_fts_au"} <= objects
 
+    def test_alt_name_fts_table_and_triggers_exist(self, engine: Engine) -> None:
+        with engine.connect() as conn:
+            objects = set(
+                conn.execute(
+                    text("SELECT name FROM sqlite_master WHERE type IN ('table','trigger')")
+                ).scalars()
+            )
+        assert "card_alt_fts" in objects
+        assert {"card_alt_fts_ai", "card_alt_fts_ad", "card_alt_fts_au"} <= objects
+
     def test_fts_starts_empty(self, engine: Engine) -> None:
         assert fts_row_count(engine) == 0
 
@@ -98,6 +109,7 @@ class TestDowngrade:
         # `alembic_version` sobrevive por design; o resto tem que sumir.
         assert not (EXPECTED_TABLES & remaining)
         assert "card_fts" not in remaining
+        assert "card_alt_fts" not in remaining
         fresh.dispose()
 
     def test_upgrade_after_downgrade_works(self, settings: Settings, engine: Engine) -> None:

@@ -19,6 +19,7 @@ from yugioh_scanner.db.tables import (
     SYNC_KEY_DATABASE_VERSION,
     SYNC_KEY_LAST_FULL_SYNC,
     Card,
+    CardAltName,
     CardImage,
     CardPrint,
     CardSet,
@@ -205,6 +206,66 @@ class TestPrintMapping:
                 session.query(CardPrint).filter(CardPrint.set_code_full == "MP24-EN999").one()
             )
             assert print_row.set_price is None
+
+
+class TestAltNames:
+    """Nomes em FR/DE/IT/PT, baixados depois do catálogo em inglês (plano
+    §7.1 multilíngue). A fixture só tem tradução PT para 2 das 5 cartas —
+    FR/DE/IT devolvem `{"data": []}` (idioma sem cobertura, caso real)."""
+
+    def test_populates_alt_names_for_languages_with_coverage(
+        self, service: SyncService, database: Database
+    ) -> None:
+        run_sync(service)
+        with database.session() as session:
+            rows = session.query(CardAltName).all()
+            assert {(r.card_id, r.language) for r in rows} == {
+                (89631139, "PT"),
+                (46986414, "PT"),
+            }
+
+    def test_normalizes_and_keeps_original_name(
+        self, service: SyncService, database: Database
+    ) -> None:
+        run_sync(service)
+        with database.session() as session:
+            alt = (
+                session.query(CardAltName)
+                .filter(CardAltName.card_id == 89631139, CardAltName.language == "PT")
+                .one()
+            )
+            assert alt.name == "Dragão Branco de Olhos Azuis"
+            assert alt.name_normalized == "dragao branco de olhos azuis"
+
+    def test_languages_without_coverage_import_nothing(
+        self, service: SyncService, database: Database
+    ) -> None:
+        run_sync(service)
+        with database.session() as session:
+            languages = {r.language for r in session.query(CardAltName).all()}
+        assert languages == {"PT"}
+
+    def test_skip_alt_names_downloads_none(self, service: SyncService, database: Database) -> None:
+        run_sync(service, alt_languages=[])
+        with database.session() as session:
+            assert session.query(CardAltName).count() == 0
+
+    def test_resync_updates_instead_of_duplicating(
+        self, service: SyncService, database: Database
+    ) -> None:
+        run_sync(service)
+        report = run_sync(service, force=True)
+        with database.session() as session:
+            assert session.query(CardAltName).count() == 2
+        assert report.stats.alt_names_inserted == 0
+        assert report.stats.alt_names_updated == 2
+
+    def test_populates_the_alt_fts_index(self, service: SyncService, database: Database) -> None:
+        from yugioh_scanner.db.fts import search_alt_card_ids
+
+        run_sync(service)
+        with database.session() as session:
+            assert search_alt_card_ids(session, "dragao branco olhos azuis") == [89631139]
 
 
 class TestIdempotency:

@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 
 from yugioh_scanner.db.tables import (
     Card,
+    CardAltName,
     CardPrint,
     CardSet,
     CollectionItem,
@@ -231,3 +232,49 @@ class TestForeignKeys:
         session.flush()
         assert card_print.card_set is not None
         assert card_print.card_set.set_name.startswith("Legend")
+
+
+class TestCardAltNameConstraints:
+    """Nomes em FR/DE/IT/PT (plano §7.1 multilíngue)."""
+
+    def test_language_vocabulary_enforced(self, session: Session) -> None:
+        card = make_card(session)
+        session.add(
+            CardAltName(card_id=card.id, language="ES", name="x", name_normalized="x")
+        )
+        with pytest.raises(IntegrityError):
+            session.flush()
+
+    def test_duplicate_language_for_same_card_is_rejected(self, session: Session) -> None:
+        card = make_card(session)
+        session.add(
+            CardAltName(card_id=card.id, language="PT", name="a", name_normalized="a")
+        )
+        session.flush()
+        session.add(
+            CardAltName(card_id=card.id, language="PT", name="b", name_normalized="b")
+        )
+        with pytest.raises(IntegrityError):
+            session.flush()
+
+    def test_same_card_different_languages_coexist(self, session: Session) -> None:
+        card = make_card(session)
+        session.add_all(
+            [
+                CardAltName(card_id=card.id, language="PT", name="a", name_normalized="a"),
+                CardAltName(card_id=card.id, language="FR", name="b", name_normalized="b"),
+            ]
+        )
+        session.flush()
+        assert session.query(CardAltName).count() == 2
+
+    def test_deleting_card_cascades_to_alt_names(self, session: Session) -> None:
+        card = make_card(session)
+        session.add(
+            CardAltName(card_id=card.id, language="PT", name="a", name_normalized="a")
+        )
+        session.commit()
+
+        session.delete(card)
+        session.commit()
+        assert session.query(CardAltName).count() == 0

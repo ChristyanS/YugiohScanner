@@ -123,6 +123,9 @@ class Card(Base):
     prints: Mapped[list[CardPrint]] = relationship(
         back_populates="card", cascade="all, delete-orphan"
     )
+    alt_names: Mapped[list[CardAltName]] = relationship(
+        back_populates="card", cascade="all, delete-orphan"
+    )
 
     __table_args__ = (
         Index("ix_card_name_normalized", "name_normalized"),
@@ -157,6 +160,48 @@ class CardImage(Base):
     card: Mapped[Card] = relationship(back_populates="images")
 
     __table_args__ = (Index("ix_card_image_card", "card_id"),)
+
+
+#: Idiomas alternativos que a YGOPRODeck traduz além do inglês (verificado ao
+#: vivo em `cardinfo.php?language=`; qualquer outro valor a API rejeita).
+ALT_NAME_LANGUAGES = ("FR", "DE", "IT", "PT")
+
+
+class CardAltName(Base):
+    """Nome de uma carta em outro idioma (FR/DE/IT/PT), vindo de
+    `cardinfo.php?language=...`.
+
+    Existe para que o matching por nome (plano §7.3) também reconheça cartas
+    fotografadas em outro idioma — sem isso, `Card.name`/`name_normalized`
+    (sempre em inglês) nunca batem com o texto lido pelo OCR de uma carta
+    impressa em português, por exemplo. O nome canônico exibido/exportado
+    continua sendo `Card.name`; esta tabela só amplia o que o matching aceita
+    como entrada.
+    """
+
+    __tablename__ = "card_alt_name"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    card_id: Mapped[int] = mapped_column(ForeignKey("card.id", ondelete="CASCADE"), nullable=False)
+    language: Mapped[str] = mapped_column(String(8), nullable=False)
+
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    #: Mesma função de normalização usada em `Card.name_normalized` (plano
+    #: §7.1) — ela já é agnóstica de idioma (NFKD + remoção de acento).
+    name_normalized: Mapped[str] = mapped_column(String(255), nullable=False)
+
+    synced_at: Mapped[dt.datetime] = mapped_column(DateTime, nullable=False, default=utcnow)
+
+    card: Mapped[Card] = relationship(back_populates="alt_names")
+
+    __table_args__ = (
+        Index("ux_card_alt_name", "card_id", "language", unique=True),
+        Index("ix_card_alt_name_normalized", "name_normalized"),
+        _check_in("language", ALT_NAME_LANGUAGES, "ck_card_alt_name_language"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<CardAltName {self.card_id} {self.language} {self.name!r}>"
 
 
 class CardSet(Base):

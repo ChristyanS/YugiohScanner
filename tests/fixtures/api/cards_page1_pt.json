@@ -1,0 +1,42 @@
+{
+  "data": [
+    {
+      "id": 89631139,
+      "name": "Dragão Branco de Olhos Azuis",
+      "type": "Normal Monster",
+      "humanReadableCardType": "Normal Monster",
+      "frameType": "normal",
+      "desc": "Este lendário dragão é um poderoso motor de destruição.",
+      "race": "Dragon",
+      "atk": 3000,
+      "def": 2500,
+      "level": 8,
+      "attribute": "LIGHT",
+      "name_en": "Blue-Eyes White Dragon"
+    },
+    {
+      "id": 46986414,
+      "name": "Mago Negro",
+      "type": "Normal Monster",
+      "humanReadableCardType": "Normal Monster",
+      "frameType": "normal",
+      "desc": "O supremo mago em termos de ataque e defesa.",
+      "race": "Spellcaster",
+      "atk": 2500,
+      "def": 2100,
+      "level": 7,
+      "attribute": "DARK",
+      "name_en": "Dark Magician"
+    }
+  ],
+  "meta": {
+    "generated": "2026-09-11T17:00:00+00:00",
+    "current_rows": 2,
+    "total_rows": 2,
+    "rows_remaining": 0,
+    "total_pages": 1,
+    "pages_remaining": 0,
+    "next_page": null,
+    "next_page_offset": null
+  }
+}

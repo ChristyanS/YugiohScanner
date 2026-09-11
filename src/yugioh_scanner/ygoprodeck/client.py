@@ -187,24 +187,37 @@ class YgoProDeckClient:
             raise ApiResponseError("cardsets.php devolveu um formato inesperado.")
         return [ApiSet.model_validate(item) for item in payload]
 
-    def fetch_card_page(self, offset: int, num: int = DEFAULT_PAGE_SIZE) -> ApiCardPage:
-        """Uma página de `cardinfo.php`, com `misc=yes` para datas e konami_id."""
-        payload = self._get("/cardinfo.php", params={"num": num, "offset": offset, "misc": "yes"})
+    def fetch_card_page(
+        self, offset: int, num: int = DEFAULT_PAGE_SIZE, *, language: str | None = None
+    ) -> ApiCardPage:
+        """Uma página de `cardinfo.php`, com `misc=yes` para datas e konami_id.
+
+        `language` pede o catálogo traduzido (`fr`, `de`, `it`, `pt` — os
+        únicos que a API aceita; qualquer outro valor ela rejeita com 400).
+        Sem ele, vem o catálogo padrão em inglês. O `id` (passcode) é o mesmo
+        em todo idioma — é o que permite ligar o nome traduzido à carta certa
+        sem uma segunda chave.
+        """
+        params: dict[str, Any] = {"num": num, "offset": offset, "misc": "yes"}
+        if language is not None:
+            params["language"] = language
+        payload = self._get("/cardinfo.php", params=params)
         if isinstance(payload, list):  # pragma: no cover - defensivo
             return ApiCardPage(data=payload)
         return ApiCardPage.model_validate(payload)
 
     def iter_cards(
-        self, page_size: int = DEFAULT_PAGE_SIZE
+        self, page_size: int = DEFAULT_PAGE_SIZE, *, language: str | None = None
     ) -> Iterator[tuple[list[ApiCard], ApiPageMeta | None]]:
         """Percorre o catálogo inteiro, página a página.
 
         Emite `(cartas, meta)` para que o chamador possa mostrar progresso sem
-        precisar saber como a paginação funciona.
+        precisar saber como a paginação funciona. `language` repassa para
+        `fetch_card_page` — o catálogo traduzido pagina normalmente.
         """
         offset = 0
         while True:
-            page = self.fetch_card_page(offset=offset, num=page_size)
+            page = self.fetch_card_page(offset=offset, num=page_size, language=language)
             if not page.data:
                 return
             yield page.data, page.meta

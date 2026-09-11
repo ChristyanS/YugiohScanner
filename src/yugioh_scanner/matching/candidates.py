@@ -12,6 +12,11 @@ e o fuzzy caro só rode quando o barato falhou:
 
 O tier 4 é a rede de segurança: só roda quando o FTS não devolve nada, o que
 acontece quando o OCR errou o começo de todas as palavras.
+
+Todos os tiers também enxergam `card_alt_name` (nomes em FR/DE/IT/PT — plano
+§7.1 multilíngue): uma carta fotografada em outro idioma casa pelo nome
+alternativo, mas o candidato devolvido sempre exibe o nome canônico em
+inglês — é o que já é gravado/exportado.
 """
 
 from __future__ import annotations
@@ -23,8 +28,8 @@ from rapidfuzz import fuzz, process
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from ..db.fts import search_card_ids
-from ..db.tables import Card
+from ..db.fts import search_alt_card_ids, search_card_ids
+from ..db.tables import Card, CardAltName
 from ..domain.normalization import normalize_fuzzy, normalize_strict
 from ..logging_setup import get_logger
 
@@ -65,6 +70,12 @@ class NameIndex:
 
     O índice é invalidado por contagem de cartas: depois de um `sync` que
     adiciona cartas, ele se recarrega sozinho.
+
+    Cada carta entra com o nome canônico **e** todos os nomes alternativos
+    conhecidos (FR/DE/IT/PT — plano §7.1 multilíngue): várias linhas nos
+    arrays paralelos apontando para o mesmo `card_id`, sempre exibindo o nome
+    em inglês (`_names`). `size` conta cartas distintas, não linhas — é o que
+    o comparativo "cresceu depois do sync" espera.
     """
 
     def __init__(self) -> None:
@@ -72,6 +83,7 @@ class NameIndex:
         self._card_ids: list[int] = []
         self._names: list[str] = []
         self._fuzzy_names: list[str] = []
+        self._distinct_cards = 0
         self._loaded_count: int | None = None
 
     def ensure_loaded(self, session: Session) -> None:
@@ -82,37 +94,66 @@ class NameIndex:
             if self._loaded_count == current:  # pragma: no cover - corrida
                 return
             rows = session.execute(select(Card.id, Card.name, Card.name_normalized)).all()
-            self._card_ids = [row.id for row in rows]
-            self._names = [row.name for row in rows]
+            canonical_names = {row.id: row.name for row in rows}
+
+            card_ids = [row.id for row in rows]
+            names = [row.name for row in rows]
             # A forma fuzzy é derivada da estrita: uma única regra de
             # normalização vale para o catálogo e para o OCR (plano §7.1).
-            self._fuzzy_names = [normalize_fuzzy(row.name_normalized) for row in rows]
+            fuzzy_names = [normalize_fuzzy(row.name_normalized) for row in rows]
+
+            alt_rows = session.execute(
+                select(CardAltName.card_id, CardAltName.name_normalized)
+            ).all()
+            for alt in alt_rows:
+                canonical = canonical_names.get(alt.card_id)
+                if canonical is None:  # pragma: no cover - FK garante consistência
+                    continue
+                card_ids.append(alt.card_id)
+                names.append(canonical)
+                fuzzy_names.append(normalize_fuzzy(alt.name_normalized))
+
+            self._card_ids = card_ids
+            self._names = names
+            self._fuzzy_names = fuzzy_names
+            self._distinct_cards = len(rows)
             self._loaded_count = current
-            log.debug("matching.index_loaded", cards=current)
+            log.debug("matching.index_loaded", cards=current, alt_names=len(alt_rows))
 
     @property
     def size(self) -> int:
-        return len(self._card_ids)
+        return self._distinct_cards
 
     def search(self, query: str, *, cutoff: int, limit: int = TOP_N) -> list[NameCandidate]:
-        """Melhores correspondências no catálogo inteiro."""
+        """Melhores correspondências no catálogo inteiro.
+
+        Uma carta pode aparecer várias vezes na lista achatada (canônico +
+        alternativos); pede-se mais candidatos brutos do que `limit` para
+        sobrar espaço depois de reduzir por `card_id`, mantendo só o melhor
+        score de cada carta — senão duas linhas da mesma carta (ex.: nome em
+        inglês e em português ambos parecidos) poderiam ocupar duas das
+        `limit` vagas e empurrar outra carta candidata para fora.
+        """
         if not query or not self._fuzzy_names:
             return []
-        matches = process.extract(
+        raw_matches = process.extract(
             query,
             self._fuzzy_names,
             scorer=fuzz.WRatio,
             score_cutoff=cutoff,
-            limit=limit,
+            limit=max(limit * 5, 25),
         )
+        best_by_card: dict[int, tuple[float, int]] = {}
+        for _match, score, index in raw_matches:
+            card_id = self._card_ids[index]
+            current_best = best_by_card.get(card_id)
+            if current_best is None or score > current_best[0]:
+                best_by_card[card_id] = (score, index)
+
+        ranked = sorted(best_by_card.items(), key=lambda item: item[1][0], reverse=True)
         return [
-            NameCandidate(
-                card_id=self._card_ids[index],
-                name=self._names[index],
-                score=score / 100.0,
-                tier=4,
-            )
-            for _match, score, index in matches
+            NameCandidate(card_id=card_id, name=self._names[index], score=score / 100.0, tier=4)
+            for card_id, (score, index) in ranked[:limit]
         ]
 
 
@@ -179,13 +220,41 @@ class CandidateFinder:
         row = self.session.execute(
             select(Card.id, Card.name).where(Card.name_normalized == strict_name).limit(1)
         ).first()
-        if row is None:
+        if row is not None:
+            return NameCandidate(card_id=row.id, name=row.name, score=1.0, tier=0)
+
+        # Sem igualdade em inglês: tenta um nome alternativo (FR/DE/IT/PT —
+        # plano §7.1 multilíngue). O nome exibido continua o canônico.
+        alt_row = self.session.execute(
+            select(Card.id, Card.name)
+            .join(CardAltName, CardAltName.card_id == Card.id)
+            .where(CardAltName.name_normalized == strict_name)
+            .limit(1)
+        ).first()
+        if alt_row is None:
             return None
-        return NameCandidate(card_id=row.id, name=row.name, score=1.0, tier=0)
+        return NameCandidate(card_id=alt_row.id, name=alt_row.name, score=1.0, tier=0)
 
     def _tier2_fts(self, raw_name: str) -> list[int]:
-        """FTS5 devolve um conjunto pequeno de plausíveis, sem varrer o banco."""
-        return search_card_ids(self.session, raw_name, limit=FTS_LIMIT)
+        """FTS5 devolve um conjunto pequeno de plausíveis, sem varrer o banco.
+
+        Busca no nome canônico e nos alternativos (FR/DE/IT/PT) e une os dois
+        conjuntos — uma carta fotografada em outro idioma só entra aqui pelo
+        `card_alt_fts` (plano §7.1 multilíngue). Limite combinado igual ao de
+        uma busca só, para o custo do tier 3 continuar previsível.
+        """
+        primary = search_card_ids(self.session, raw_name, limit=FTS_LIMIT)
+        alt = search_alt_card_ids(self.session, raw_name, limit=FTS_LIMIT)
+        if not alt:
+            return primary
+
+        combined = list(primary)
+        seen = set(primary)
+        for card_id in alt:
+            if card_id not in seen:
+                seen.add(card_id)
+                combined.append(card_id)
+        return combined[:FTS_LIMIT]
 
     def _tier3_rerank(
         self, fuzzy_query: str, card_ids: list[int], *, limit: int
@@ -194,6 +263,12 @@ class CandidateFinder:
 
         O FTS ordena por bm25, que mede relevância de tokens — não distância de
         edição. É o rerank que sabe que `WH1TE` está a um caractere de `WHITE`.
+
+        Um candidato pode ter vindo do FTS por um nome alternativo: comparar
+        só contra o nome em inglês o descartaria (score baixo contra um
+        idioma que não é o da leitura). O score de cada carta é o **máximo**
+        entre o nome canônico e todos os nomes alternativos dela (plano §7.1
+        multilíngue).
         """
         rows = self.session.execute(
             select(Card.id, Card.name, Card.name_normalized).where(Card.id.in_(card_ids))
@@ -201,12 +276,21 @@ class CandidateFinder:
         if not rows:
             return []
 
+        alt_names: dict[int, list[str]] = {}
+        for alt in self.session.execute(
+            select(CardAltName.card_id, CardAltName.name_normalized).where(
+                CardAltName.card_id.in_(card_ids)
+            )
+        ):
+            alt_names.setdefault(alt.card_id, []).append(alt.name_normalized)
+
         scored: list[NameCandidate] = []
         for row in rows:
-            score = fuzz.WRatio(fuzzy_query, normalize_fuzzy(row.name_normalized))
-            if score >= self.fuzzy_cutoff:
+            variants = (row.name_normalized, *alt_names.get(row.id, ()))
+            best_score = max(fuzz.WRatio(fuzzy_query, normalize_fuzzy(v)) for v in variants)
+            if best_score >= self.fuzzy_cutoff:
                 scored.append(
-                    NameCandidate(card_id=row.id, name=row.name, score=score / 100.0, tier=3)
+                    NameCandidate(card_id=row.id, name=row.name, score=best_score / 100.0, tier=3)
                 )
         scored.sort(key=lambda candidate: candidate.score, reverse=True)
         return scored[:limit]

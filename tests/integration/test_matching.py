@@ -166,6 +166,79 @@ class TestCrossConfirmation:
         assert result.decision == Decision.MANUAL
 
 
+class TestAlternateLanguageMatching:
+    """Cartas fotografadas em outro idioma (plano §7.1 multilíngue).
+
+    A fixture do catálogo compartilhado (`catalog`) inclui nomes em PT para
+    Blue-Eyes ("Dragão Branco de Olhos Azuis") e Dark Magician ("Mago Negro")
+    — ver `tests/fixtures/api/cards_page1_pt.json`. Reproduz o caso real: o
+    OCR lê o nome certo em português e o catálogo só conhecia inglês.
+    """
+
+    def test_exact_alt_name_matches_at_tier_zero(self, matcher: MatchingEngine) -> None:
+        result = matcher.match("Dragão Branco de Olhos Azuis")
+        assert result.card_id == BLUE_EYES
+        assert result.card_name == "Blue-Eyes White Dragon", "exibe sempre o nome canônico"
+        assert result.tier == 0
+        assert result.decision == Decision.AUTO
+
+    def test_alt_name_case_and_accent_do_not_matter(self, matcher: MatchingEngine) -> None:
+        assert matcher.match("mago negro").card_id == DARK_MAGICIAN
+        assert matcher.match("MAGO NEGRO").card_id == DARK_MAGICIAN
+
+    @pytest.mark.parametrize(
+        "ocr_text",
+        [
+            "Drag5o Branco de Olhos Azuis",  # 5/S trocado por OCR
+            "DRAGAO BRANCO DE OLHOS AZU1S",
+            "Dragao Branco de Olhos Azui",  # truncamento
+        ],
+    )
+    def test_corrupted_alt_name_still_resolves(
+        self, matcher: MatchingEngine, ocr_text: str
+    ) -> None:
+        result = matcher.match(ocr_text)
+        assert result.card_id == BLUE_EYES, f"{ocr_text!r} -> {result.card_name!r}"
+
+    def test_alt_name_candidate_uses_tiers_two_and_three(
+        self, catalog: Database, settings: Settings
+    ) -> None:
+        """O nome alternativo é achado pelo FTS (tier 2) e sobrevive ao rerank
+        (tier 3) — sem o rerank considerar os nomes alternativos, o candidato
+        certo seria descartado por comparar só contra o nome em inglês."""
+        with catalog.session() as session:
+            finder = CandidateFinder(session, index=NameIndex())
+            candidates = finder.find("Mago Negr0")
+            assert candidates and candidates[0].card_id == DARK_MAGICIAN
+            assert finder.tier_attempts[2] == 1
+            assert finder.tier_hits[3] == 1
+            assert finder.tier_attempts[4] == 0
+
+    def test_alt_name_reaches_tier_four_when_fts_finds_nothing(
+        self, catalog: Database, settings: Settings
+    ) -> None:
+        """OCR errou o começo de toda palavra, em português: nenhum token do
+        FTS (nem `card_fts`, nem `card_alt_fts`) casa, e só o fuzzy sobre o
+        catálogo inteiro — que também precisa enxergar os nomes alternativos —
+        acha a carta certa."""
+        with catalog.session() as session:
+            finder = CandidateFinder(session, index=NameIndex())
+            candidates = finder.find("ZAGO NEGRZ")
+            assert finder.tier_attempts[2] == 1
+            assert finder.tier_attempts[3] == 0, "o FTS não devolveu nada para reranquear"
+            assert finder.tier_attempts[4] == 1
+            assert candidates and candidates[0].card_id == DARK_MAGICIAN
+
+    def test_name_index_counts_distinct_cards_not_alt_name_rows(self, catalog: Database) -> None:
+        """`size` é usado para saber se o catálogo cresceu (§ TestNameIndex);
+        contar linhas em vez de cartas distintas o deixaria errado assim que
+        uma carta tivesse nome alternativo."""
+        index = NameIndex()
+        with catalog.session() as session:
+            index.ensure_loaded(session)
+        assert index.size == 5, "5 cartas na fixture, mesmo com nomes alternativos"
+
+
 class TestTierEscalation:
     """Critério de aceitação: o tier 4 só roda quando o tier 2 falha."""
 

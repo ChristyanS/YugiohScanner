@@ -26,13 +26,15 @@ def _run_sync(
     force: bool,
     sets_only: bool,
     quiet: bool,
+    skip_alt_names: bool = False,
 ) -> SyncReport:
     """Executa o sync mostrando progresso real (páginas, não spinner falso)."""
     settings = get_settings()
+    alt_languages: list[str] | None = [] if skip_alt_names else None
 
     with sync_service(settings) as service:
         if quiet:
-            return service.sync(force=force, sets_only=sets_only)
+            return service.sync(force=force, sets_only=sets_only, alt_languages=alt_languages)
 
         with Progress(
             SpinnerColumn(),
@@ -48,7 +50,12 @@ def _run_sync(
             def on_progress(processed: int, total: int) -> None:
                 progress.update(task, completed=processed, total=total or None)
 
-            return service.sync(force=force, sets_only=sets_only, progress=on_progress)
+            return service.sync(
+                force=force,
+                sets_only=sets_only,
+                progress=on_progress,
+                alt_languages=alt_languages,
+            )
 
 
 def _report(report: SyncReport, as_json: bool) -> None:
@@ -82,6 +89,8 @@ def _report(report: SyncReport, as_json: bool) -> None:
                 "prints atualizados": stats.prints_updated,
                 "sets novos": stats.sets_inserted,
                 "sets atualizados": stats.sets_updated,
+                "nomes alternativos novos": stats.alt_names_inserted,
+                "nomes alternativos atualizados": stats.alt_names_updated,
             },
         )
         if stats.prints_stale:
@@ -102,6 +111,11 @@ def init_command(
     force: bool = typer.Option(False, "--force", help="Recria o banco do zero (faz backup antes)."),
     skip_sync: bool = typer.Option(
         False, "--skip-sync", help="Só cria o banco, sem baixar o catálogo."
+    ),
+    skip_alt_names: bool = typer.Option(
+        False,
+        "--skip-alt-names",
+        help="Não baixa nomes em FR/DE/IT/PT (deixa o matching só em inglês).",
     ),
     as_json: bool = typer.Option(False, "--json", help="Saída em JSON."),
 ) -> None:
@@ -132,7 +146,10 @@ def init_command(
         warn("Catálogo não baixado (--skip-sync). Rode `yugioh-scanner sync` depois.")
         return
 
-    _report(_run_sync(force=False, sets_only=False, quiet=as_json), as_json)
+    _report(
+        _run_sync(force=False, sets_only=False, quiet=as_json, skip_alt_names=skip_alt_names),
+        as_json,
+    )
 
 
 @handle_errors
@@ -143,6 +160,11 @@ def sync_command(
     sets_only: bool = typer.Option(
         False, "--sets-only", help="Atualiza apenas o catálogo de sets."
     ),
+    skip_alt_names: bool = typer.Option(
+        False,
+        "--skip-alt-names",
+        help="Não baixa nomes em FR/DE/IT/PT (deixa o matching só em inglês).",
+    ),
     as_json: bool = typer.Option(False, "--json", help="Saída em JSON."),
 ) -> None:
     """Atualiza o catálogo local a partir da API do YGOPRODeck.
@@ -150,7 +172,10 @@ def sync_command(
     Sem `--force`, consulta a versão remota primeiro e não faz nada se ela não
     mudou — o caso comum custa uma requisição.
     """
-    _report(_run_sync(force=force, sets_only=sets_only, quiet=as_json), as_json)
+    _report(
+        _run_sync(force=force, sets_only=sets_only, quiet=as_json, skip_alt_names=skip_alt_names),
+        as_json,
+    )
 
 
 @handle_errors

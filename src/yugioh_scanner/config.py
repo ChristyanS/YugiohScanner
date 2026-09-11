@@ -113,6 +113,15 @@ class Settings(BaseSettings):
     confidence_review: float = Field(default=0.70, ge=0.0, le=1.0)
     fuzzy_cutoff: int = Field(default=70, ge=0, le=100)
 
+    # -------------------------------------------------------------------- sync
+    sync_alt_languages: list[str] = Field(
+        default_factory=lambda: ["FR", "DE", "IT", "PT"],
+        description=(
+            "Idiomas alternativos baixados a mais no sync, para o matching "
+            "reconhecer cartas fotografadas nesses idiomas. Vazio desliga."
+        ),
+    )
+
     # ------------------------------------------------------------------- rede
     ygoprodeck_base_url: str = "https://db.ygoprodeck.com/api/v7"
     ygoprodeck_image_host: str = "images.ygoprodeck.com"
@@ -168,6 +177,21 @@ class Settings(BaseSettings):
         if level not in valid:
             raise ValueError(f"log_level deve ser um de {sorted(valid)}, recebido {value!r}")
         return level
+
+    @field_validator("sync_alt_languages")
+    @classmethod
+    def _valid_alt_languages(cls, value: list[str]) -> list[str]:
+        # Mesmo vocabulário do CHECK de `card_alt_name.language`
+        # (db/tables.py `ALT_NAME_LANGUAGES`) — duplicado aqui, não importado,
+        # para `config` continuar sem depender de `db` (plano §17).
+        valid = {"FR", "DE", "IT", "PT"}
+        normalized = [lang.upper() for lang in value]
+        unknown = sorted(set(normalized) - valid)
+        if unknown:
+            raise ValueError(
+                f"sync_alt_languages aceita apenas {sorted(valid)}, recebido {unknown}"
+            )
+        return normalized
 
     @field_validator("ocr_workers")
     @classmethod

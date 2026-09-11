@@ -133,11 +133,15 @@ class SyncService:
         sets_only: bool = False,
         page_size: int = DEFAULT_PAGE_SIZE,
         progress: ProgressCallback | None = None,
+        alt_languages: list[str] | None = None,
     ) -> SyncReport:
         """Baixa e importa o catálogo.
 
         Sem `force`, respeita a decisão de `check()` e pode não fazer nada.
+        `alt_languages` sobrepõe `settings.sync_alt_languages` só para esta
+        chamada (é o que `--skip-alt-names` usa, passando `[]`).
         """
+        languages = self.settings.sync_alt_languages if alt_languages is None else alt_languages
         started = utcnow()
 
         decision = self.check()
@@ -187,6 +191,22 @@ class SyncService:
                         log.info("sync.page_imported", cards=len(page))
                     if progress is not None:
                         progress(processed, total or processed)
+
+                for language in languages:
+                    lang_processed = 0
+                    for page, meta in self.client.iter_cards(
+                        page_size=page_size, language=language.lower()
+                    ):
+                        stats.merge(importer.import_alt_names(page, language))
+                        session.flush()
+
+                        lang_processed += len(page)
+                        with log_context(
+                            language=language,
+                            processed=lang_processed,
+                            total=meta.total_rows if meta else None,
+                        ):
+                            log.info("sync.alt_names_page_imported", cards=len(page))
 
             state = SyncStateRepository(session)
             state.set_many(
