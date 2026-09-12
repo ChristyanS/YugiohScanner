@@ -1,9 +1,10 @@
 """Geradores de dados para testes.
 
 As "cartas" sintéticas imitam o **layout** de uma carta de Yu-Gi-Oh! (nome na
-faixa superior, set code no canto inferior direito) na proporção real 59×86 mm.
-Isso permite exercitar ROI, pré-processamento e até o OCR de verdade sem
-depender de um corpus de fotos — que, conforme o plano §19.4, entra na Fase 9.
+faixa superior, set code logo abaixo da arte, acima da caixa de texto/efeito)
+na proporção real 59×86 mm. Isso permite exercitar ROI, pré-processamento e
+até o OCR de verdade sem depender de um corpus de fotos — que, conforme o
+plano §19.4, entra na Fase 9.
 """
 
 from __future__ import annotations
@@ -65,23 +66,27 @@ def make_card_image(
 
     # Arte, só para a imagem não ser uma chapa lisa.
     draw.rectangle(
-        [(int(width * 0.12), int(height * 0.16)), (int(width * 0.88), int(height * 0.55))],
+        [(int(width * 0.12), int(height * 0.16)), (int(width * 0.88), int(height * 0.665))],
         fill=(90, 120, 170),
         outline=(40, 40, 40),
     )
 
-    # Caixa de texto da carta.
-    draw.rectangle(
-        [(int(width * 0.07), int(height * 0.60)), (int(width * 0.93), int(height * 0.85))],
-        fill=(226, 214, 186),
-    )
-
-    # Set code: canto inferior direito (mesma ROI do preprocess).
+    # Set code: logo abaixo da arte, acima da caixa de texto (mesma ROI do
+    # preprocess — plano de idiomas, continuação: a posição antiga aqui
+    # coincidia com o bug real da ROI, então corrigir só o `preprocess.py`
+    # sem mexer aqui teria deixado os testes "passando" contra um layout que
+    # nenhuma carta de verdade tem).
     draw.text(
-        (int(width * 0.60), int(height * 0.865)),
+        (int(width * 0.50), int(height * 0.705)),
         set_code,
         fill=(15, 15, 15),
         font=_font(max(11, int(height * 0.032))),
+    )
+
+    # Caixa de texto da carta.
+    draw.rectangle(
+        [(int(width * 0.07), int(height * 0.80)), (int(width * 0.93), int(height * 0.93))],
+        fill=(226, 214, 186),
     )
 
     if margin:

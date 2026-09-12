@@ -10,6 +10,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 
 import pytest
+from sqlalchemy.orm import Session
 
 from yugioh_scanner.config import Settings
 from yugioh_scanner.db.session import Database
@@ -195,6 +196,16 @@ class TestAlternateLanguageMatching:
         assert result.card_id == DARK_MAGICIAN
         assert result.matched_language == "PT"
 
+    def test_code_region_takes_priority_over_name_language(
+        self, matcher: MatchingEngine
+    ) -> None:
+        """Continuação do plano de idiomas (docs/adr/0009): o código já diz
+        a região explicitamente — vence o nome, mesmo que o nome tenha
+        casado por `card_alt_name` num idioma diferente."""
+        result = matcher.match("Dragão Branco de Olhos Azuis", "CT13-EN008")
+        assert result.card_id == BLUE_EYES
+        assert result.matched_language == "EN"
+
     @pytest.mark.parametrize(
         "ocr_text",
         [
@@ -348,4 +359,79 @@ class TestResolverDirectly:
         with catalog.session() as session:
             resolution = PrintResolver(session).resolve(None)
             assert resolution.score == 0.0
-            assert not resolution.validated
+
+
+class TestResolverLanguageFallback:
+    """Continuação do plano de idiomas (docs/adr/0009): quando o código lido
+    tem uma região sem print sincronizado (o caso comum — DE/FR/IT, ou PT
+    fora de produtos OTS), cai para o equivalente em inglês sem perder o
+    idioma detectado. Usa dados sintéticos (`session`, schema vazio) porque
+    o catálogo de fixtures não tem um par regional de verdade."""
+
+    def test_falls_back_to_english_when_the_regional_print_does_not_exist(
+        self, session: Session
+    ) -> None:
+        from yugioh_scanner.db.tables import Card, CardPrint, CardSet
+
+        session.add(CardSet(set_code="SR06", set_name="Structure Deck: Dinosmasher's Fury"))
+        session.add(
+            Card(id=1, name="Ahrima", name_normalized="ahrima", type="Effect Monster", desc="")
+        )
+        session.add(
+            CardPrint(
+                card_id=1,
+                set_code_full="SR06-EN002",
+                set_code_normalized="SR06-EN002",
+                set_prefix="SR06",
+                set_name="Structure Deck: Dinosmasher's Fury",
+                region="EN",
+                number="002",
+                rarity="Common",
+            )
+        )
+        session.flush()
+
+        resolution = PrintResolver(session).resolve("SR06-PT002")
+
+        assert resolution.detected_region == "PT", "a carta física diz PT, mesmo sem print PT"
+        assert resolution.matched_code == "SR06-EN002"
+        assert resolution.card_id == 1
+        assert resolution.validated
+
+    def test_uses_the_real_regional_print_when_it_exists(self, session: Session) -> None:
+        from yugioh_scanner.db.tables import Card, CardPrint, CardSet
+
+        session.add(CardSet(set_code="OP13", set_name="OTS Tournament Pack 13 (POR)"))
+        session.add(
+            Card(id=2, name="X", name_normalized="x", type="Effect Monster", desc="")
+        )
+        for region, print_id in (("EN", 10), ("PT", 11)):
+            session.add(
+                CardPrint(
+                    id=print_id,
+                    card_id=2,
+                    set_code_full=f"OP13-{region}006",
+                    set_code_normalized=f"OP13-{region}006",
+                    set_prefix="OP13",
+                    set_name="OTS Tournament Pack 13 (POR)",
+                    region=region,
+                    number="006",
+                    rarity="Ultra Rare",
+                )
+            )
+        session.flush()
+
+        resolution = PrintResolver(session).resolve("OP13-PT006")
+
+        assert resolution.detected_region == "PT"
+        assert resolution.matched_code == "OP13-PT006", "não precisa de fallback: o print existe"
+        assert resolution.print_id == 11
+
+    def test_english_code_never_triggers_a_fallback_attempt(self, session: Session) -> None:
+        resolution = PrintResolver(session).resolve("LOB-EN001")
+        assert resolution.detected_region == "EN"
+        assert not resolution.validated  # catálogo vazio: nada deveria casar de propósito
+
+    def test_unrecognized_code_has_no_detected_region(self, session: Session) -> None:
+        resolution = PrintResolver(session).resolve("not a set code")
+        assert resolution.detected_region is None

@@ -103,11 +103,13 @@ class TestDownscale:
 
 class TestRegions:
     def test_rois_are_disjoint_and_in_the_right_halves(self) -> None:
-        """Nome em cima, código embaixo: se isso inverter, tudo quebra."""
+        """Nome em cima, código logo abaixo da arte — nem no topo, nem perto
+        do copyright (posição antiga, nunca conferida contra foto real:
+        media a caixa de efeito, 0% de acerto no corpus real de fotos)."""
         assert NAME_ROI.bottom < CODE_ROI.top
         assert NAME_ROI.top < 0.2
-        assert CODE_ROI.bottom > 0.8
-        assert CODE_ROI.left > 0.5, "o set code fica à direita"
+        assert 0.6 < CODE_ROI.top < 0.8, "abaixo da arte, bem antes do rodapé"
+        assert CODE_ROI.bottom < 0.85, "acima da caixa de texto/efeito"
 
     def test_to_pixels_clamps_to_the_image(self) -> None:
         box = BoundingBox(0.0, 0.0, 1.5, 1.5)

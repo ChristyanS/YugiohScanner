@@ -57,6 +57,14 @@ class CodeResolution:
     prefix_known: bool = False
     #: A regex reconheceu a forma, ainda que nada tenha casado no banco.
     parsed: bool = False
+    #: Região que o código **lido** carregava (`SetCode.region`), antes de
+    #: qualquer substituição por inglês — plano de idiomas, continuação
+    #: (docs/adr/0009). É o sinal mais direto de idioma que existe: o código
+    #: impresso na carta física. Fica preenchido mesmo quando o print daquela
+    #: região não existe no catálogo e a resolução caiu para o equivalente em
+    #: inglês (`matched_code` vira "-EN-", mas `detected_region` continua
+    #: sendo o que a carta realmente diz).
+    detected_region: str | None = None
 
     @property
     def validated(self) -> bool:
@@ -103,6 +111,7 @@ class CodeResolution:
             "validated": self.validated,
             "prefix_known": self.prefix_known,
             "prints": [print_match.as_dict() for print_match in self.prints],
+            "detected_region": self.detected_region,
         }
 
 
@@ -124,13 +133,26 @@ class PrintResolver:
 
         Testa a leitura original e depois as variantes corrigidas, **na ordem**,
         e para na primeira que existir no banco. Nada é aceito sem casar.
+
+        Quando nada valida e o código carregava uma região diferente de
+        inglês, tenta a mesma carta com região `EN` antes de desistir — plano
+        de idiomas, continuação (docs/adr/0009): a maioria dos produtos não
+        tem print distinto por idioma (a carta física usa o código em inglês
+        mesmo impressa em outro idioma); só um punhado (PT/OTS) tem código
+        próprio, e nem todo produto desses foi sincronizado. `detected_region`
+        guarda o que a carta realmente diz, para a coleção registrar o idioma
+        certo mesmo usando o print em inglês.
         """
         if not raw_code or not raw_code.strip():
             return CodeResolution(raw=raw_code or "")
 
         resolution = CodeResolution(raw=raw_code)
+        initial_parse = parse_set_code(raw_code)
+        if initial_parse is not None:
+            resolution.detected_region = initial_parse.region
 
-        for variant in correction_variants(raw_code):
+        variants = correction_variants(raw_code)
+        for variant in variants:
             parsed = parse_set_code(variant)
             if parsed is not None:
                 resolution.parsed = True
@@ -142,9 +164,26 @@ class PrintResolver:
             if prints:
                 resolution.matched_code = normalized
                 resolution.prints = prints
-                if variant != correction_variants(raw_code)[0]:
+                if variant != variants[0]:
                     log.debug("matching.code_corrected", raw=raw_code, matched=normalized)
                 return resolution
+
+        if (
+            initial_parse is not None
+            and resolution.detected_region
+            and resolution.detected_region != "EN"
+        ):
+            en_code = normalize_set_code(f"{initial_parse.prefix}-EN{initial_parse.number}")
+            prints = self._find_prints(en_code)
+            if prints:
+                resolution.matched_code = en_code
+                resolution.prints = prints
+                log.debug(
+                    "matching.code_language_fallback",
+                    raw=raw_code,
+                    detected_region=resolution.detected_region,
+                    matched=en_code,
+                )
 
         return resolution
 

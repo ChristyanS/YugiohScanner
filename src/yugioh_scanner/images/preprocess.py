@@ -65,8 +65,14 @@ class BoundingBox:
 #: Faixa do nome: topo da carta, deixando de fora o ícone de atributo à direita.
 NAME_ROI = BoundingBox(0.04, 0.025, 0.82, 0.115)
 
-#: Faixa do set code: canto inferior direito, acima do texto de copyright.
-CODE_ROI = BoundingBox(0.52, 0.855, 0.99, 0.935)
+#: Faixa do set code: logo abaixo da arte (monstro/spell/trap), acima da caixa
+#: de texto/efeito — não perto do copyright, como a versão anterior assumia
+#: sem checar contra uma foto real. Conferido visualmente contra várias fotos
+#: reais do corpus da Fase 9 (estrutura, booster, carta antiga SDY, monstro
+#: Link) — a posição é a mesma nos quatro estilos de moldura. A versão antiga
+#: media exatamente a caixa de efeito, nunca o código (0% de acerto no corpus
+#: real, plano de idiomas — continuação).
+CODE_ROI = BoundingBox(0.42, 0.69, 0.98, 0.775)
 
 
 class ImageError(YugiohScannerError):

@@ -180,7 +180,10 @@ class MatchingEngine:
             print_options=self._print_options(card_id, code),
             tier=best.tier,
             agreement=agreement,
-            matched_language=best.language,
+            # O código impresso é o sinal de idioma mais direto que existe —
+            # tem prioridade sobre o nome (plano de idiomas, continuação:
+            # docs/adr/0009) quando os dois estão disponíveis.
+            matched_language=code.detected_region or best.language,
         )
 
     # ------------------------------------------------------------- internos
@@ -278,6 +281,7 @@ class MatchingEngine:
                 "só o set code foi lido; confirme a carta" if card_id else "nada legível na imagem"
             ),
             print_options=self._print_options(card_id, code),
+            matched_language=code.detected_region,
         )
 
     def _print_options(self, card_id: int | None, code: CodeResolution) -> list[dict[str, Any]]:
