@@ -106,6 +106,31 @@ class TestValidation:
         assert Settings(ocr_provider="meu-plugin").ocr_provider == "meu-plugin"
 
 
+class TestSyncAltLanguages:
+    """Validação por **formato**, não por enumeração fechada (docs/
+    proposta-i18n-cartas-e-sets.md §1.6): a API já aceitou na prática um
+    idioma (`ja`) que nem ela mesma documenta como válido."""
+
+    def test_default_includes_undocumented_but_verified_languages(self) -> None:
+        assert Settings().sync_alt_languages == ["FR", "DE", "IT", "PT", "JA", "KO"]
+
+    def test_lowercase_is_normalized_to_upper(self) -> None:
+        assert Settings(sync_alt_languages=["pt", "ja"]).sync_alt_languages == ["PT", "JA"]
+
+    def test_language_outside_default_vocabulary_is_accepted(self) -> None:
+        """Não é uma enumeração fechada — `db probe-languages` é quem diz se
+        a API aceita de verdade, não este validador."""
+        assert Settings(sync_alt_languages=["ES"]).sync_alt_languages == ["ES"]
+
+    def test_empty_list_disables_alt_names(self) -> None:
+        assert Settings(sync_alt_languages=[]).sync_alt_languages == []
+
+    @pytest.mark.parametrize("bad", ["P", "PORT", "P1", "PT-BR"])
+    def test_invalid_format_rejected(self, bad: str) -> None:
+        with pytest.raises(ValidationError, match="sync_alt_languages"):
+            Settings(sync_alt_languages=[bad])
+
+
 class TestEnvironment:
     def test_env_var_with_prefix_is_read(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("YGS_OCR_PROVIDER", "tesseract")

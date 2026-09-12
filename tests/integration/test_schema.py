@@ -235,15 +235,33 @@ class TestForeignKeys:
 
 
 class TestCardAltNameConstraints:
-    """Nomes em FR/DE/IT/PT (plano §7.1 multilíngue)."""
+    """Nomes traduzidos (plano §7.1 multilíngue).
 
-    def test_language_vocabulary_enforced(self, session: Session) -> None:
+    O CHECK de `language` é de **formato** (2-3 letras maiúsculas), não de
+    enumeração fechada — docs/proposta-i18n-cartas-e-sets.md §1.6: a API já
+    aceitou na prática um idioma (`ja`) que nem ela mesma documenta como
+    válido, então travar numa lista fixa só adiaria a próxima surpresa.
+    """
+
+    def test_language_format_enforced(self, session: Session) -> None:
+        card = make_card(session)
+        session.add(
+            CardAltName(card_id=card.id, language="pt", name="x", name_normalized="x")
+        )
+        with pytest.raises(IntegrityError):
+            session.flush()
+
+    def test_language_outside_default_vocabulary_is_still_valid_format(
+        self, session: Session
+    ) -> None:
+        """`ES` não está em `ALT_NAME_LANGUAGES` (o app não sincroniza
+        espanhol hoje), mas o banco não precisa saber disso — só o formato."""
         card = make_card(session)
         session.add(
             CardAltName(card_id=card.id, language="ES", name="x", name_normalized="x")
         )
-        with pytest.raises(IntegrityError):
-            session.flush()
+        session.flush()
+        assert session.query(CardAltName).filter_by(language="ES").count() == 1
 
     def test_duplicate_language_for_same_card_is_rejected(self, session: Session) -> None:
         card = make_card(session)

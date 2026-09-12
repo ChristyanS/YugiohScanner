@@ -237,6 +237,20 @@ class TestAltNames:
             assert alt.name == "Dragão Branco de Olhos Azuis"
             assert alt.name_normalized == "dragao branco de olhos azuis"
 
+    def test_captures_name_en_as_integrity_check(
+        self, service: SyncService, database: Database
+    ) -> None:
+        """`name_en` vem de graça na resposta traduzida (docs/proposta-i18n-
+        cartas-e-sets.md §1.2) — guardado só como conferência, não como chave."""
+        run_sync(service)
+        with database.session() as session:
+            alt = (
+                session.query(CardAltName)
+                .filter(CardAltName.card_id == 89631139, CardAltName.language == "PT")
+                .one()
+            )
+            assert alt.name_en == "Blue-Eyes White Dragon"
+
     def test_languages_without_coverage_import_nothing(
         self, service: SyncService, database: Database
     ) -> None:

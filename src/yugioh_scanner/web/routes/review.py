@@ -11,13 +11,23 @@ from __future__ import annotations
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse
 
+from ...db.tables import ALT_NAME_LANGUAGES
 from ..deps import ScanServiceDep
 
 router = APIRouter()
+
+#: Idioma da carta física é texto livre no banco (`collection_item.language`
+#: não tem CHECK), mas o `<select>` da revisão precisa de uma lista finita —
+#: a mesma que o app sincroniza/exibe em outras telas (db/tables.py).
+_LANGUAGE_OPTIONS = ("EN", *ALT_NAME_LANGUAGES)
 
 
 @router.get("/review", response_class=HTMLResponse)
 def review_page(request: Request, scans: ScanServiceDep) -> HTMLResponse:
     pending_count = len(scans.pending_results(limit=10_000))
     templates = request.app.state.templates
-    return templates.TemplateResponse(request, "review.html", {"pending_count": pending_count})
+    return templates.TemplateResponse(
+        request,
+        "review.html",
+        {"pending_count": pending_count, "languages": _LANGUAGE_OPTIONS},
+    )

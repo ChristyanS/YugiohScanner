@@ -34,11 +34,9 @@
 
     <label>Idioma da carta física
       <select id="language-select">
-        <option value="EN">EN</option>
-        <option value="FR">FR</option>
-        <option value="DE">DE</option>
-        <option value="IT">IT</option>
-        <option value="PT">PT</option>
+        {% for code in languages %}
+        <option value="{{ code }}">{{ code }}</option>
+        {% endfor %}
       </select>
     </label>
     <small id="language-hint" hidden></small>

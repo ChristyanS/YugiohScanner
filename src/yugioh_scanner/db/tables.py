@@ -162,14 +162,19 @@ class CardImage(Base):
     __table_args__ = (Index("ix_card_image_card", "card_id"),)
 
 
-#: Idiomas alternativos que a YGOPRODeck traduz além do inglês (verificado ao
-#: vivo em `cardinfo.php?language=`; qualquer outro valor a API rejeita).
-ALT_NAME_LANGUAGES = ("FR", "DE", "IT", "PT")
+#: Idiomas alternativos que o app baixa/exibe por padrão, além do inglês.
+#: `FR/DE/IT/PT` são documentados no guia oficial da API; `JA/KO` **não são**
+#: — a própria mensagem de erro da API lista só os quatro primeiros — mas
+#: foram confirmados ao vivo em `cardinfo.php?language=ja|ko` (verificado em
+#: 2026-09-12, docs/proposta-i18n-cartas-e-sets.md). Por serem
+#: não-documentados, o comportamento pode mudar sem aviso; `db probe-languages`
+#: revalida isso contra a API a qualquer momento. Esta lista é só o default de
+#: exibição/sync — o banco não trava em cima dela (ver CHECK abaixo).
+ALT_NAME_LANGUAGES = ("FR", "DE", "IT", "PT", "JA", "KO")
 
 
 class CardAltName(Base):
-    """Nome de uma carta em outro idioma (FR/DE/IT/PT), vindo de
-    `cardinfo.php?language=...`.
+    """Nome de uma carta em outro idioma, vindo de `cardinfo.php?language=...`.
 
     Existe para que o matching por nome (plano §7.3) também reconheça cartas
     fotografadas em outro idioma — sem isso, `Card.name`/`name_normalized`
@@ -195,6 +200,12 @@ class CardAltName(Base):
     #: usar a tradução para o matching do OCR). Vazio em bancos sincronizados
     #: antes desta coluna existir, até o próximo `sync`.
     desc: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    #: Nome em inglês que a própria resposta traduzida traz de graça
+    #: (`name_en`) — não é usado como chave (o vínculo já é `card_id`), só
+    #: como conferência: se um dia divergir de `Card.name` para o mesmo
+    #: `card_id`, é sinal de tradução mal vinculada na fonte. NULL em bancos
+    #: sincronizados antes desta coluna existir.
+    name_en: Mapped[str | None] = mapped_column(String(255))
 
     synced_at: Mapped[dt.datetime] = mapped_column(DateTime, nullable=False, default=utcnow)
 
@@ -203,7 +214,17 @@ class CardAltName(Base):
     __table_args__ = (
         Index("ux_card_alt_name", "card_id", "language", unique=True),
         Index("ix_card_alt_name_normalized", "name_normalized"),
-        _check_in("language", ALT_NAME_LANGUAGES, "ck_card_alt_name_language"),
+        # Checagem de **formato**, não de enumeração fechada (docs/
+        # proposta-i18n-cartas-e-sets.md §1.6): a API já aceitou na prática um
+        # idioma (`ja`) que nem ela mesma documenta como válido, então
+        # travar aqui numa lista fixa só garante que o próximo idioma
+        # "surpresa" vai exigir outra migração. A lista de idiomas que o app
+        # efetivamente sincroniza/exibe é `ALT_NAME_LANGUAGES`, em Python —
+        # essa sim pode crescer sem tocar no schema.
+        CheckConstraint(
+            "length(language) BETWEEN 2 AND 3 AND language = upper(language)",
+            name="ck_card_alt_name_language_format",
+        ),
     )
 
     def __repr__(self) -> str:

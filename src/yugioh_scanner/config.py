@@ -137,10 +137,13 @@ class Settings(BaseSettings):
 
     # -------------------------------------------------------------------- sync
     sync_alt_languages: list[str] = Field(
-        default_factory=lambda: ["FR", "DE", "IT", "PT"],
+        default_factory=lambda: ["FR", "DE", "IT", "PT", "JA", "KO"],
         description=(
             "Idiomas alternativos baixados a mais no sync, para o matching "
-            "reconhecer cartas fotografadas nesses idiomas. Vazio desliga."
+            "reconhecer cartas fotografadas nesses idiomas. Vazio desliga. "
+            "JA/KO não são documentados pela API, só confirmados ao vivo "
+            "(docs/proposta-i18n-cartas-e-sets.md) — `db probe-languages` "
+            "revalida a qualquer momento."
         ),
     )
 
@@ -203,15 +206,22 @@ class Settings(BaseSettings):
     @field_validator("sync_alt_languages")
     @classmethod
     def _valid_alt_languages(cls, value: list[str]) -> list[str]:
-        # Mesmo vocabulário do CHECK de `card_alt_name.language`
-        # (db/tables.py `ALT_NAME_LANGUAGES`) — duplicado aqui, não importado,
-        # para `config` continuar sem depender de `db` (plano §17).
-        valid = {"FR", "DE", "IT", "PT"}
+        # Checagem de **formato** (2-3 letras), não de enumeração fechada —
+        # mesma decisão do CHECK de `card_alt_name.language`
+        # (db/tables.py `ck_card_alt_name_language_format`, duplicada aqui
+        # sem import para `config` continuar sem depender de `db`, plano
+        # §17). Motivo: a API já aceitou na prática um idioma (`ja`) que nem
+        # o guia oficial nem a própria mensagem de erro dela documentam —
+        # travar numa lista fixa só adia a próxima surpresa, não evita
+        # (docs/proposta-i18n-cartas-e-sets.md §1.4/§1.6). Quem quer saber
+        # se um código específico funciona hoje deve rodar
+        # `yugioh-scanner db probe-languages`, não confiar na validação aqui.
         normalized = [lang.upper() for lang in value]
-        unknown = sorted(set(normalized) - valid)
-        if unknown:
+        invalid = sorted(lang for lang in normalized if not (2 <= len(lang) <= 3 and lang.isalpha()))
+        if invalid:
             raise ValueError(
-                f"sync_alt_languages aceita apenas {sorted(valid)}, recebido {unknown}"
+                f"sync_alt_languages espera códigos de 2-3 letras (ex. 'PT', 'JA'), "
+                f"recebido {invalid}"
             )
         return normalized
 

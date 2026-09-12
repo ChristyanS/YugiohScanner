@@ -141,6 +141,7 @@ def alt_name_row(api_card: ApiCard, language: str, now: Any) -> dict[str, Any]:
         "name": api_card.name,
         "name_normalized": normalize_strict(api_card.name),
         "desc": api_card.desc or "",
+        "name_en": api_card.name_en,
         "synced_at": now,
     }
 

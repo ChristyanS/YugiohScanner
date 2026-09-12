@@ -108,6 +108,10 @@ class ApiCard(ApiModel):
     typeline: list[str] | None = None
     linkmarkers: list[str] | None = None
     ygoprodeck_url: str | None = None
+    #: Só vem preenchido quando a consulta pediu `language=...`: o nome em
+    #: inglês, de graça, junto do nome traduzido. Usado como conferência de
+    #: integridade da tradução (docs/proposta-i18n-cartas-e-sets.md §1.2).
+    name_en: str | None = None
 
     card_sets: list[ApiCardSet] = Field(default_factory=list)
     card_images: list[ApiCardImage] = Field(default_factory=list)

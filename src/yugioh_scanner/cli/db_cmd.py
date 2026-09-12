@@ -29,9 +29,11 @@ from ..db.migrations import (
 )
 from ..db.session import Database
 from ..db.tables import (
+    ALT_NAME_LANGUAGES,
     SYNC_KEY_DATABASE_VERSION,
     SYNC_KEY_LAST_FULL_SYNC,
 )
+from ..ygoprodeck.client import YgoProDeckClient
 from .errors import handle_errors
 from .render import (
     ARROW,
@@ -186,6 +188,53 @@ def check() -> None:
             typer.echo(f"  {row}")
         raise typer.Exit(code=2)
     success("foreign_key_check: ok")
+
+
+@app.command("probe-languages")
+@handle_errors
+def probe_languages_cmd(
+    languages: str = typer.Option(
+        None,
+        "--languages",
+        help=(
+            "Lista separada por vírgula (ex. 'fr,de,es'). Default: os idiomas "
+            "de db.tables.ALT_NAME_LANGUAGES."
+        ),
+    ),
+    as_json: bool = typer.Option(False, "--json", help="Saída em JSON."),
+) -> None:
+    """Testa ao vivo quais códigos de `language=` a API aceita hoje.
+
+    Não usa nem confia no guia oficial: ele (e a própria mensagem de erro que
+    a API devolve para um valor inválido) lista só fr/de/it/pt, mas ja/ko
+    também funcionam na prática (docs/proposta-i18n-cartas-e-sets.md). Como
+    esse comportamento não é documentado, revalidar contra a API de verdade é
+    a única forma confiável de saber se ele ainda vale — não requer banco.
+    """
+    settings = get_settings()
+    candidates = (
+        [code.strip().upper() for code in languages.split(",") if code.strip()]
+        if languages
+        else list(ALT_NAME_LANGUAGES)
+    )
+
+    client = YgoProDeckClient(settings)
+    try:
+        results = client.probe_languages(candidates)
+    finally:
+        client.close()
+
+    if as_json:
+        print_json(results)
+        return
+
+    print_key_values(
+        "Idiomas aceitos pela API (ao vivo)",
+        {code: ("sim" if accepted else "não") for code, accepted in results.items()},
+    )
+    rejected = [code for code, accepted in results.items() if not accepted]
+    if rejected:
+        hint(f"Rejeitados agora: {', '.join(rejected)}.")
 
 
 @app.command("vacuum")

@@ -115,7 +115,7 @@ def init_command(
     skip_alt_names: bool = typer.Option(
         False,
         "--skip-alt-names",
-        help="Não baixa nomes em FR/DE/IT/PT (deixa o matching só em inglês).",
+        help="Não baixa nomes traduzidos (settings.sync_alt_languages; deixa o matching só em inglês).",
     ),
     as_json: bool = typer.Option(False, "--json", help="Saída em JSON."),
 ) -> None:
@@ -163,7 +163,7 @@ def sync_command(
     skip_alt_names: bool = typer.Option(
         False,
         "--skip-alt-names",
-        help="Não baixa nomes em FR/DE/IT/PT (deixa o matching só em inglês).",
+        help="Não baixa nomes traduzidos (settings.sync_alt_languages; deixa o matching só em inglês).",
     ),
     as_json: bool = typer.Option(False, "--json", help="Saída em JSON."),
 ) -> None:

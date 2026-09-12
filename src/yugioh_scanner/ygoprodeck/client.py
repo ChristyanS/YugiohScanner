@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import threading
 import time
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -30,6 +30,11 @@ USER_AGENT = "yugioh-scanner/0.1 (+https://github.com/ChristyanS/YugiohScanner)"
 #: Tamanho de página. Grande o bastante para poucas requisições, pequeno o
 #: bastante para a memória não explodir.
 DEFAULT_PAGE_SIZE = 1000
+
+#: Carta usada como sonda em `probe_language` — precisa ter tradução
+#: conhecida em qualquer idioma que se queira testar. Dark Magician/Mago
+#: Negro tem tradução confirmada em fr/de/it/pt/ja/ko (2026-09-12).
+PROBE_CARD_ID = 46986414
 
 
 class RateLimiter:
@@ -240,6 +245,34 @@ class YgoProDeckClient:
             return None  # a API devolve 400 quando o nome não existe
         page = ApiCardPage.model_validate(payload)
         return page.data[0] if page.data else None
+
+    def probe_language(self, language: str, *, probe_card_id: int = PROBE_CARD_ID) -> bool:
+        """A API aceita `language` agora, de verdade?
+
+        Não confia no guia oficial nem na mensagem de erro que a própria API
+        devolve para um valor inválido — os dois citam só `fr/de/it/pt`, mas
+        `ja` e `ko` funcionam na prática (verificado em 2026-09-12,
+        docs/proposta-i18n-cartas-e-sets.md §1.4). Como não há changelog
+        público para esse tipo de comportamento não-documentado, a única
+        forma confiável de saber é perguntar à API — o que este método faz,
+        contra uma carta com tradução conhecida.
+        """
+        try:
+            self._get(
+                "/cardinfo.php", params={"id": probe_card_id, "language": language.lower()}
+            )
+            return True
+        except ApiResponseError:
+            return False
+
+    def probe_languages(
+        self, languages: Sequence[str], *, probe_card_id: int = PROBE_CARD_ID
+    ) -> dict[str, bool]:
+        """`probe_language` para vários candidatos — usado por `db probe-languages`."""
+        return {
+            language: self.probe_language(language, probe_card_id=probe_card_id)
+            for language in languages
+        }
 
     # -------------------------------------------------------------- imagens
 
