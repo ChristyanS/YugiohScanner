@@ -244,6 +244,9 @@ class ConfirmBody(BaseModel):
     card_id: int
     card_print_id: int | None = None
     quantity: int = Field(default=1, ge=1)
+    #: Idioma da carta física escolhido na revisão. Omitido, o serviço cai
+    #: para o idioma que o matching detectou sozinho (`ScanResult.detected_language`).
+    language: str | None = None
 
 
 @router.post("/scan-results/{result_id}/confirm")
@@ -253,6 +256,7 @@ def confirm_scan_result(result_id: int, body: ConfirmBody, scans: ScanServiceDep
         card_id=body.card_id,
         card_print_id=body.card_print_id,
         quantity=body.quantity,
+        language=body.language,
     )
     return item_to_dict(item)
 

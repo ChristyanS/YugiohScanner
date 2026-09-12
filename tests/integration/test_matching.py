@@ -37,6 +37,7 @@ class TestExactMatching:
         assert result.card_id == BLUE_EYES
         assert result.tier == 0
         assert result.decision == Decision.AUTO
+        assert result.matched_language == "EN"
 
     def test_case_and_spacing_do_not_matter(self, matcher: MatchingEngine) -> None:
         assert matcher.match("  BLUE-EYES   WHITE DRAGON ").card_id == BLUE_EYES
@@ -181,10 +182,18 @@ class TestAlternateLanguageMatching:
         assert result.card_name == "Blue-Eyes White Dragon", "exibe sempre o nome canônico"
         assert result.tier == 0
         assert result.decision == Decision.AUTO
+        assert result.matched_language == "PT", "idioma detectado pro palpite de idioma da carta"
 
     def test_alt_name_case_and_accent_do_not_matter(self, matcher: MatchingEngine) -> None:
         assert matcher.match("mago negro").card_id == DARK_MAGICIAN
         assert matcher.match("MAGO NEGRO").card_id == DARK_MAGICIAN
+
+    def test_matched_language_survives_the_rerank_tier(self, matcher: MatchingEngine) -> None:
+        """Não só `CandidateFinder`: o `MatchResult` inteiro carrega o idioma
+        do candidato vencedor, mesmo quando ele veio do tier 3 (rerank)."""
+        result = matcher.match("Mago Negr0")
+        assert result.card_id == DARK_MAGICIAN
+        assert result.matched_language == "PT"
 
     @pytest.mark.parametrize(
         "ocr_text",
@@ -210,6 +219,7 @@ class TestAlternateLanguageMatching:
             finder = CandidateFinder(session, index=NameIndex())
             candidates = finder.find("Mago Negr0")
             assert candidates and candidates[0].card_id == DARK_MAGICIAN
+            assert candidates[0].language == "PT"
             assert finder.tier_attempts[2] == 1
             assert finder.tier_hits[3] == 1
             assert finder.tier_attempts[4] == 0
@@ -228,6 +238,7 @@ class TestAlternateLanguageMatching:
             assert finder.tier_attempts[3] == 0, "o FTS não devolveu nada para reranquear"
             assert finder.tier_attempts[4] == 1
             assert candidates and candidates[0].card_id == DARK_MAGICIAN
+            assert candidates[0].language == "PT"
 
     def test_name_index_counts_distinct_cards_not_alt_name_rows(self, catalog: Database) -> None:
         """`size` é usado para saber se o catálogo cresceu (§ TestNameIndex);

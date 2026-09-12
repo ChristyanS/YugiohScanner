@@ -29,6 +29,7 @@ from ..db.tables import (
     DEFAULT_CONDITION,
     DEFAULT_EDITION,
     DEFAULT_LANGUAGE,
+    CardPrint,
     CollectionItem,
     ScanImage,
     ScanJob,
@@ -44,6 +45,7 @@ from ..errors import (
 from ..logging_setup import get_logger, log_context
 from ..matching.candidates import NameIndex
 from ..matching.engine import MatchingEngine, MatchResult
+from ..matching.print_language import PrintLanguageResolver, SiblingPrintLanguageResolver
 from ..repositories.collection import CollectionKey, CollectionRepository
 from ..repositories.scans import ScanRepository
 from ..scanner.discovery import DiscoveredImage, discover_images, resolve_scan_folder
@@ -151,7 +153,13 @@ ProgressCallback = Callable[[ImageEvent], None]
 class ScanService:
     """Orquestra descoberta + OCR + matching + coleção, com controle de sessão."""
 
-    def __init__(self, database: Database, settings: Settings) -> None:
+    def __init__(
+        self,
+        database: Database,
+        settings: Settings,
+        *,
+        language_resolver: PrintLanguageResolver | None = None,
+    ) -> None:
         self.database = database
         self.settings = settings
         # Um índice por instância do serviço: reaproveitado entre imagens do
@@ -159,6 +167,11 @@ class ScanService:
         # Recarregar os ~14,5k nomes por imagem custaria a busca inteira de
         # novo a cada foto (plano §20.2).
         self._name_index = NameIndex()
+        # Injetável de propósito (plano de idiomas): a regra de hoje só acha
+        # print irmão quando o catálogo já sincronizou um (caso PT/OP — ver
+        # `matching/print_language.py`); uma base própria de traduções entra
+        # aqui depois, sem tocar no resto do serviço.
+        self.language_resolver = language_resolver or SiblingPrintLanguageResolver()
 
     def scan(
         self,
@@ -267,6 +280,7 @@ class ScanService:
         card_id: int,
         card_print_id: int | None = None,
         quantity: int = 1,
+        language: str | None = None,
     ) -> CollectionItem:
         """Aplica manualmente um resultado pendente/manual (revisão humana).
 
@@ -274,6 +288,11 @@ class ScanService:
         pessoa em vez da política de confiança — por isso passa pela mesma
         `CollectionRepository.add_copies` e fica marcado `applied=True`,
         preservando a garantia de que uma imagem só conta uma vez (§13.2).
+
+        `language` explícito (a tela de revisão manda o que está selecionado
+        no momento da confirmação) tem prioridade; omitido, cai para o
+        idioma que o matching já havia detectado (`ScanResult.detected_language`)
+        e só então para `DEFAULT_LANGUAGE` — nunca fica sem valor.
         """
         with self.database.session() as session:
             scan_repo = ScanRepository(session)
@@ -290,7 +309,7 @@ class ScanService:
                 card_print_id=card_print_id,
                 condition=DEFAULT_CONDITION,
                 edition=DEFAULT_EDITION,
-                language=DEFAULT_LANGUAGE,
+                language=language or result.detected_language or DEFAULT_LANGUAGE,
             )
             item = collection_repo.add_copies(key, quantity, source="scan")
             # "confirmed" não é uma saída da política de confiança (por isso
@@ -560,6 +579,7 @@ class ScanService:
             margin=match_result.margin,
             candidates=match_result.candidates or None,
             decision=decision.value,
+            detected_language=match_result.matched_language,
         )
 
         if decision != Decision.AUTO or match_result.card_id is None:
@@ -572,12 +592,33 @@ class ScanService:
             log.info("scan.reprocess_not_reapplied", scan_image_id=scan_image_id)
             return False, result.id
 
+        # Sem revisão humana aqui — é a alta confiança que dispensa isso —
+        # então é o único lugar onde vale a pena *tentar* trocar para o print
+        # no idioma detectado sozinho. Na esmagadora maioria dos casos
+        # (DE/FR/IT) não existe print irmão e nada muda; quando existe (PT/
+        # OTS), a carta entra na coleção já com o código certo.
+        print_id = match_result.card_print_id
+        language = match_result.matched_language or DEFAULT_LANGUAGE
+        if match_result.matched_language and match_result.matched_language != "EN":
+            current_print = (
+                collection_repo.session.get(CardPrint, print_id) if print_id is not None else None
+            )
+            swapped = self.language_resolver.resolve(
+                collection_repo.session, match_result.card_id, current_print, language
+            )
+            if swapped is not None:
+                print_id = swapped.id
+                # O registro de auditoria também reflete o print de verdade
+                # usado — senão `ScanResult.card_print_id` mentiria sobre o
+                # que a coleção recebeu.
+                result.card_print_id = print_id
+
         key = CollectionKey(
             card_id=match_result.card_id,
-            card_print_id=match_result.card_print_id,
+            card_print_id=print_id,
             condition=DEFAULT_CONDITION,
             edition=DEFAULT_EDITION,
-            language=DEFAULT_LANGUAGE,
+            language=language,
         )
         item = collection_repo.add_copies(key, 1, source="scan")
         scan_repo.mark_applied(result, item.id)

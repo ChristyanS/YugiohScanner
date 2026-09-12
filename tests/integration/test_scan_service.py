@@ -17,11 +17,12 @@ from pathlib import Path
 
 import pytest
 from sqlalchemy import func, select
+from sqlalchemy.orm import Session
 
 from tests.factories import make_card_image, make_corrupted_image
 from yugioh_scanner.config import Settings
 from yugioh_scanner.db.session import Database
-from yugioh_scanner.db.tables import CollectionItem, ScanImage, ScanJob, ScanResult
+from yugioh_scanner.db.tables import CardPrint, CollectionItem, ScanImage, ScanJob, ScanResult
 from yugioh_scanner.ocr.fake_provider import FakeOCRProvider
 from yugioh_scanner.ocr.registry import register_provider, unregister_provider
 from yugioh_scanner.scanner.worker import reset_provider
@@ -172,6 +173,105 @@ class TestAutomaticMatching:
             assert job.pending == report.pending == 1
             assert job.failed == report.failed == 0
             assert job.skipped == report.skipped == 0
+
+
+class _StubLanguageResolver:
+    """Sempre devolve o mesmo print, não importa quem pergunta — usado só
+    para provar que `ScanService` de fato consulta o resolver injetado e usa
+    o que ele devolve, sem depender de o catálogo de fixtures ter um par
+    EN/PT de verdade (só produtos "OP" têm isso — ver docs/adr/0009)."""
+
+    def __init__(self, print_id: int) -> None:
+        self.print_id = print_id
+        self.calls: list[tuple[int, str]] = []
+
+    def resolve(self, session: Session, card_id: int, current_print: object, language: str) -> CardPrint | None:
+        self.calls.append((card_id, language))
+        return session.get(CardPrint, self.print_id)
+
+
+class TestDetectedLanguage:
+    """Continuação do plano de idiomas (docs/adr/0009): o idioma do candidato
+    de nome vencedor vira `ScanResult.detected_language`, e o caminho
+    automático já registra esse idioma na coleção — sem precisar de revisão
+    humana para isso."""
+
+    def test_pt_alt_name_match_is_recorded_and_tags_the_collection_item(
+        self, catalog: Database, settings: Settings, tmp_path: Path
+    ) -> None:
+        folder = tmp_path / "cards_lang"
+        make_card_image(folder / "mago_negro.jpg", name="Mago Negro")
+        register_provider(
+            "fake", lambda _settings: FakeOCRProvider({"mago_negro.jpg": {"name": "Mago Negro"}})
+        )
+        reset_provider()
+
+        report = scan(catalog, settings, folder)
+        assert report.auto_added == 1
+
+        with catalog.session() as session:
+            result = session.execute(select(ScanResult)).scalar_one()
+            assert result.card_id == DARK_MAGICIAN
+            assert result.detected_language == "PT"
+
+            item = session.execute(
+                select(CollectionItem).where(CollectionItem.card_id == DARK_MAGICIAN)
+            ).scalar_one()
+            assert item.language == "PT"
+
+    def test_english_match_is_recorded_as_en(
+        self, catalog: Database, settings: Settings, cards_folder: Path
+    ) -> None:
+        scan(catalog, settings, cards_folder)
+        with catalog.session() as session:
+            image = session.execute(
+                select(ScanImage).where(ScanImage.file_path.like("%blue_eyes.jpg"))
+            ).scalar_one()
+            result = session.execute(
+                select(ScanResult).where(ScanResult.scan_image_id == image.id)
+            ).scalar_one()
+            assert result.detected_language == "EN"
+
+            item = session.execute(
+                select(CollectionItem).where(CollectionItem.card_id == BLUE_EYES)
+            ).scalar_one()
+            assert item.language == "EN"
+
+    def test_auto_path_uses_the_injected_language_resolver_to_swap_the_print(
+        self, catalog: Database, settings: Settings, tmp_path: Path
+    ) -> None:
+        """A troca de print no caminho automático passa pelo
+        `PrintLanguageResolver` injetado (plano de idiomas, docs/adr/0009) —
+        e o registro de auditoria (`ScanResult.card_print_id`) acompanha."""
+        folder = tmp_path / "cards_lang"
+        make_card_image(folder / "mago_negro.jpg", name="Mago Negro")
+        register_provider(
+            "fake", lambda _settings: FakeOCRProvider({"mago_negro.jpg": {"name": "Mago Negro"}})
+        )
+        reset_provider()
+
+        with catalog.session() as session:
+            sdk_print_id = session.execute(
+                select(CardPrint.id).where(
+                    CardPrint.card_id == DARK_MAGICIAN, CardPrint.set_code_full == "SDK-001"
+                )
+            ).scalar_one()
+
+        stub = _StubLanguageResolver(sdk_print_id)
+        report = ScanService(catalog, settings, language_resolver=stub).scan(
+            folder, provider_name="fake", workers=1
+        )
+        assert report.auto_added == 1
+        assert stub.calls == [(DARK_MAGICIAN, "PT")]
+
+        with catalog.session() as session:
+            item = session.execute(
+                select(CollectionItem).where(CollectionItem.card_id == DARK_MAGICIAN)
+            ).scalar_one()
+            assert item.card_print_id == sdk_print_id
+
+            result = session.execute(select(ScanResult)).scalar_one()
+            assert result.card_print_id == sdk_print_id
 
 
 class TestIdempotency:
@@ -444,6 +544,41 @@ class TestReview:
 
         item = svc.confirm_result(target.id, card_id=DARK_MAGICIAN, card_print_id=None)
         assert item.card_id == DARK_MAGICIAN
+
+    def test_confirm_falls_back_to_the_detected_language_when_omitted(
+        self, catalog: Database, settings: Settings, tmp_path: Path
+    ) -> None:
+        """Continuação do plano de idiomas: sem `language` explícito na
+        confirmação, o que o matching detectou sozinho prevalece."""
+        folder = tmp_path / "cards_lang"
+        make_card_image(folder / "mago_negro.jpg", name="Mago Negro")
+        register_provider(
+            "fake", lambda _settings: FakeOCRProvider({"mago_negro.jpg": {"name": "Mago Negro"}})
+        )
+        reset_provider()
+
+        scan(catalog, settings, folder, no_auto=True)
+        svc = service(catalog, settings)
+        target = svc.pending_results()[0]
+        assert target.detected_language == "PT"
+
+        item = svc.confirm_result(target.id, card_id=DARK_MAGICIAN, card_print_id=None)
+        assert item.language == "PT"
+
+    def test_confirm_with_explicit_language_overrides_the_detected_one(
+        self, catalog: Database, settings: Settings, cards_folder: Path
+    ) -> None:
+        scan(catalog, settings, cards_folder, no_auto=True)
+        svc = service(catalog, settings)
+        blue_eyes_result = next(
+            r for r in svc.pending_results() if r.ocr_name_raw == "Blue-Eyes White Dragon"
+        )
+        assert blue_eyes_result.detected_language == "EN"
+
+        item = svc.confirm_result(
+            blue_eyes_result.id, card_id=BLUE_EYES, card_print_id=None, language="DE"
+        )
+        assert item.language == "DE"
 
 
 class TestJobIntrospection:

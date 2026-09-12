@@ -65,6 +65,10 @@ class MatchResult:
     #: recebe só o `MatchResult` (ex.: `scripts/calibrate_thresholds.py`)
     #: consiga reconstruir a decisão sem recalcular o matching inteiro.
     agreement: bool | None = None
+    #: Idioma do candidato de nome vencedor (`NameCandidate.language`) — o
+    #: palpite de em que idioma a carta física está impressa. `None` quando
+    #: não há candidato de nome (`_from_code_only`: só o set code foi lido).
+    matched_language: str | None = None
 
     @property
     def matched(self) -> bool:
@@ -85,6 +89,7 @@ class MatchResult:
             "tier": self.tier,
             "candidates": self.candidates,
             "print_options": self.print_options,
+            "matched_language": self.matched_language,
         }
 
 
@@ -175,6 +180,7 @@ class MatchingEngine:
             print_options=self._print_options(card_id, code),
             tier=best.tier,
             agreement=agreement,
+            matched_language=best.language,
         )
 
     # ------------------------------------------------------------- internos

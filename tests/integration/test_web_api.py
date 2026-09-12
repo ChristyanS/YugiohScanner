@@ -403,6 +403,32 @@ class TestScanResultActions:
         )
         assert again.status_code == 409
 
+    def test_confirm_accepts_an_explicit_language(
+        self, client: TestClient, tmp_path: Path, scripted_provider: None
+    ) -> None:
+        """Continuação do plano de idiomas: a tela de revisão manda o
+        idioma escolhido no corpo da confirmação."""
+        folder = cards_folder(tmp_path)
+        run_id = client.post(
+            "/api/v1/scans",
+            json={"folder": str(folder), "provider": "roteiro", "workers": 1, "auto": False},
+        ).json()["run_id"]
+        events = _collect_sse_events(client, run_id)
+        job_id = next(e for e in events if e["event"] == "done")["job_id"]
+
+        pending = client.get(
+            f"/api/v1/scans/{job_id}/results", params={"decision": "pending"}
+        ).json()
+        target = pending[0]
+        assert target["detected_language"] == "EN"
+
+        confirmed = client.post(
+            f"/api/v1/scan-results/{target['id']}/confirm",
+            json={"card_id": target["card_id"], "quantity": 1, "language": "DE"},
+        )
+        assert confirmed.status_code == 200
+        assert confirmed.json()["language"] == "DE"
+
         rejected = client.post(f"/api/v1/scan-results/{pending[1]['id']}/reject")
         assert rejected.json() == {"rejected": True}
 

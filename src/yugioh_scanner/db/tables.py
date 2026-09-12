@@ -447,6 +447,13 @@ class ScanResult(Base):
     ocr_name_raw: Mapped[str | None] = mapped_column(String(512))
     ocr_code_raw: Mapped[str | None] = mapped_column(String(64))
 
+    #: Idioma que o nome casado sugere (o candidato vencedor veio de
+    #: `card.name_normalized` -> "EN", ou de `card_alt_name.language`
+    #: FR/DE/IT/PT — plano de idiomas §3-continuação). Livre como
+    #: `collection_item.language` (sem CHECK): é um palpite de exibição/
+    #: pré-seleção na revisão, não um vocabulário fechado.
+    detected_language: Mapped[str | None] = mapped_column(String(8))
+
     name_score: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
     code_score: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
     confidence: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)

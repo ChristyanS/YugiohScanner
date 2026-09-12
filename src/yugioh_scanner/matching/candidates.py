@@ -52,6 +52,12 @@ class NameCandidate:
     score: float
     #: Em qual tier da escada este candidato apareceu.
     tier: int
+    #: Idioma da variante de nome que gerou o score — "EN" para o nome
+    #: canônico, ou o idioma de `card_alt_name` (FR/DE/IT/PT) quando o texto
+    #: lido bateu melhor com uma tradução. É o sinal de "em que idioma essa
+    #: carta física provavelmente está impressa" (continuação do plano de
+    #: idiomas — ver `matching/print_language.py`).
+    language: str | None = None
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -59,6 +65,7 @@ class NameCandidate:
             "name": self.name,
             "score": round(self.score, 4),
             "tier": self.tier,
+            "language": self.language,
         }
 
 
@@ -83,6 +90,7 @@ class NameIndex:
         self._card_ids: list[int] = []
         self._names: list[str] = []
         self._fuzzy_names: list[str] = []
+        self._languages: list[str] = []
         self._distinct_cards = 0
         self._loaded_count: int | None = None
 
@@ -101,9 +109,10 @@ class NameIndex:
             # A forma fuzzy é derivada da estrita: uma única regra de
             # normalização vale para o catálogo e para o OCR (plano §7.1).
             fuzzy_names = [normalize_fuzzy(row.name_normalized) for row in rows]
+            languages = ["EN"] * len(rows)
 
             alt_rows = session.execute(
-                select(CardAltName.card_id, CardAltName.name_normalized)
+                select(CardAltName.card_id, CardAltName.name_normalized, CardAltName.language)
             ).all()
             for alt in alt_rows:
                 canonical = canonical_names.get(alt.card_id)
@@ -112,10 +121,12 @@ class NameIndex:
                 card_ids.append(alt.card_id)
                 names.append(canonical)
                 fuzzy_names.append(normalize_fuzzy(alt.name_normalized))
+                languages.append(alt.language)
 
             self._card_ids = card_ids
             self._names = names
             self._fuzzy_names = fuzzy_names
+            self._languages = languages
             self._distinct_cards = len(rows)
             self._loaded_count = current
             log.debug("matching.index_loaded", cards=current, alt_names=len(alt_rows))
@@ -152,7 +163,13 @@ class NameIndex:
 
         ranked = sorted(best_by_card.items(), key=lambda item: item[1][0], reverse=True)
         return [
-            NameCandidate(card_id=card_id, name=self._names[index], score=score / 100.0, tier=4)
+            NameCandidate(
+                card_id=card_id,
+                name=self._names[index],
+                score=score / 100.0,
+                tier=4,
+                language=self._languages[index],
+            )
             for card_id, (score, index) in ranked[:limit]
         ]
 
@@ -221,19 +238,21 @@ class CandidateFinder:
             select(Card.id, Card.name).where(Card.name_normalized == strict_name).limit(1)
         ).first()
         if row is not None:
-            return NameCandidate(card_id=row.id, name=row.name, score=1.0, tier=0)
+            return NameCandidate(card_id=row.id, name=row.name, score=1.0, tier=0, language="EN")
 
         # Sem igualdade em inglês: tenta um nome alternativo (FR/DE/IT/PT —
         # plano §7.1 multilíngue). O nome exibido continua o canônico.
         alt_row = self.session.execute(
-            select(Card.id, Card.name)
+            select(Card.id, Card.name, CardAltName.language)
             .join(CardAltName, CardAltName.card_id == Card.id)
             .where(CardAltName.name_normalized == strict_name)
             .limit(1)
         ).first()
         if alt_row is None:
             return None
-        return NameCandidate(card_id=alt_row.id, name=alt_row.name, score=1.0, tier=0)
+        return NameCandidate(
+            card_id=alt_row.id, name=alt_row.name, score=1.0, tier=0, language=alt_row.language
+        )
 
     def _tier2_fts(self, raw_name: str) -> list[int]:
         """FTS5 devolve um conjunto pequeno de plausíveis, sem varrer o banco.
@@ -268,7 +287,8 @@ class CandidateFinder:
         só contra o nome em inglês o descartaria (score baixo contra um
         idioma que não é o da leitura). O score de cada carta é o **máximo**
         entre o nome canônico e todos os nomes alternativos dela (plano §7.1
-        multilíngue).
+        multilíngue) — e o idioma da variante vencedora vira `language` do
+        candidato, o palpite de em que idioma a carta física está impressa.
         """
         rows = self.session.execute(
             select(Card.id, Card.name, Card.name_normalized).where(Card.id.in_(card_ids))
@@ -276,21 +296,31 @@ class CandidateFinder:
         if not rows:
             return []
 
-        alt_names: dict[int, list[str]] = {}
+        alt_names: dict[int, list[tuple[str, str]]] = {}
         for alt in self.session.execute(
-            select(CardAltName.card_id, CardAltName.name_normalized).where(
-                CardAltName.card_id.in_(card_ids)
-            )
+            select(
+                CardAltName.card_id, CardAltName.language, CardAltName.name_normalized
+            ).where(CardAltName.card_id.in_(card_ids))
         ):
-            alt_names.setdefault(alt.card_id, []).append(alt.name_normalized)
+            alt_names.setdefault(alt.card_id, []).append((alt.language, alt.name_normalized))
 
         scored: list[NameCandidate] = []
         for row in rows:
-            variants = (row.name_normalized, *alt_names.get(row.id, ()))
-            best_score = max(fuzz.WRatio(fuzzy_query, normalize_fuzzy(v)) for v in variants)
+            variants = (("EN", row.name_normalized), *alt_names.get(row.id, ()))
+            best_language, best_score = "EN", -1.0
+            for language, variant in variants:
+                variant_score = fuzz.WRatio(fuzzy_query, normalize_fuzzy(variant))
+                if variant_score > best_score:
+                    best_score, best_language = variant_score, language
             if best_score >= self.fuzzy_cutoff:
                 scored.append(
-                    NameCandidate(card_id=row.id, name=row.name, score=best_score / 100.0, tier=3)
+                    NameCandidate(
+                        card_id=row.id,
+                        name=row.name,
+                        score=best_score / 100.0,
+                        tier=3,
+                        language=best_language,
+                    )
                 )
         scored.sort(key=lambda candidate: candidate.score, reverse=True)
         return scored[:limit]

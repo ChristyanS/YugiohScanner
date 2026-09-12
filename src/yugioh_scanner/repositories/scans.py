@@ -199,6 +199,7 @@ class ScanRepository:
         margin: float,
         candidates: list[dict] | None,
         decision: str,
+        detected_language: str | None = None,
     ) -> ScanResult:
         result = ScanResult(
             scan_image_id=scan_image_id,
@@ -212,6 +213,7 @@ class ScanRepository:
             margin=margin,
             candidates=candidates,
             decision=decision,
+            detected_language=detected_language,
         )
         self.session.add(result)
         self.session.flush()

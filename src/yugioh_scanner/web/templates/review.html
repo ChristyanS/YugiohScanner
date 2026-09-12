@@ -32,6 +32,17 @@
       <small id="print-auto-hint" hidden>Set detectado automaticamente pelo código lido.</small>
     </div>
 
+    <label>Idioma da carta física
+      <select id="language-select">
+        <option value="EN">EN</option>
+        <option value="FR">FR</option>
+        <option value="DE">DE</option>
+        <option value="IT">IT</option>
+        <option value="PT">PT</option>
+      </select>
+    </label>
+    <small id="language-hint" hidden></small>
+
     <label>Quantidade
       <input type="number" id="quantity" value="1" min="1">
     </label>
@@ -50,6 +61,9 @@ let queue = [];
 let index = 0;
 let selectedCandidate = null;
 let selectedPrint = null;
+//: Prints da carta selecionada (última resposta de `/api/v1/cards/{id}`) —
+//: guardado para o filtro de idioma não precisar buscar de novo.
+let currentPrints = [];
 
 const counter = document.getElementById("counter");
 const emptyState = document.getElementById("empty-state");
@@ -61,6 +75,8 @@ const candidatesEl = document.getElementById("candidates");
 const printSection = document.getElementById("print-section");
 const printSelect = document.getElementById("print-select");
 const printAutoHint = document.getElementById("print-auto-hint");
+const languageSelect = document.getElementById("language-select");
+const languageHint = document.getElementById("language-hint");
 const quantityInput = document.getElementById("quantity");
 const errorBox = document.getElementById("review-error");
 const manualSearchDetails = document.getElementById("manual-search");
@@ -101,12 +117,17 @@ function render() {
   quantityInput.value = 1;
   selectedCandidate = null;
   selectedPrint = null;
+  currentPrints = [];
   printSection.hidden = true;
   printSelect.innerHTML = "";
   manualSearchDetails.open = false;
   manualSearchInput.value = "";
   manualSearchResults.innerHTML = "";
   selectedLabel.textContent = "";
+  // Pré-seleciona o idioma que o matching detectou sozinho (nome casou por
+  // `card_alt_name` — plano de idiomas) — a pessoa confirma ou corrige.
+  languageSelect.value = r.detected_language || "EN";
+  languageHint.hidden = true;
 
   candidatesEl.innerHTML = "";
   (r.candidates || []).slice(0, 5).forEach((c, i) => {
@@ -157,8 +178,9 @@ async function selectCard(cardId, candidate, autoPrintId) {
 
   const res = await fetch(`/api/v1/cards/${cardId}`);
   const card = await res.json();
+  currentPrints = card.prints;
   printSelect.innerHTML = '<option value="">(set indefinido)</option>' +
-    card.prints.map(p => `<option value="${p.id}">${p.set_code} — ${p.rarity || "?"}</option>`).join("");
+    card.prints.map(p => `<option value="${p.id}">${p.set_code} — ${p.rarity || "?"}${p.region ? " [" + p.region + "]" : ""}</option>`).join("");
   printSection.hidden = false;
   const auto = autoPrintId ? String(autoPrintId) : "";
   printSelect.value = auto;
@@ -168,7 +190,28 @@ async function selectCard(cardId, candidate, autoPrintId) {
     selectedPrint = printSelect.value || null;
     printAutoHint.hidden = true;
   };
+  // Se a carta física já foi detectada num idioma que tem print distinto no
+  // catálogo (hoje só PT/OTS — ver `matching/print_language.py`), troca a
+  // seleção automática do código pela seleção do idioma certo.
+  applyLanguageFilter();
 }
+
+function applyLanguageFilter() {
+  const lang = languageSelect.value;
+  languageHint.hidden = true;
+  if (lang === "EN" || !currentPrints.length) return;
+  const match = currentPrints.find((p) => p.region === lang);
+  if (match) {
+    printSelect.value = String(match.id);
+    selectedPrint = String(match.id);
+    printAutoHint.hidden = true;
+  } else {
+    languageHint.hidden = false;
+    languageHint.textContent = `Sem print específico em ${lang} no catálogo — o mesmo código serve para qualquer idioma.`;
+  }
+}
+
+languageSelect.addEventListener("change", applyLanguageFilter);
 
 async function runManualSearch(query) {
   if (!query.trim()) { manualSearchResults.innerHTML = ""; return; }
@@ -204,6 +247,7 @@ async function confirmCurrent() {
       card_id: selectedCandidate.card_id,
       card_print_id: selectedPrint ? parseInt(selectedPrint, 10) : null,
       quantity: parseInt(quantityInput.value, 10) || 1,
+      language: languageSelect.value,
     }),
   });
   const payload = await res.json();
