@@ -114,3 +114,57 @@
 }
 
 progress { width: 100%; }
+
+.gallery-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1.25rem;
+  margin-block: 1rem;
+}
+
+.gallery-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  color: inherit;
+  text-decoration: none;
+}
+
+.gallery-thumb {
+  position: relative;
+  width: 100%;
+}
+
+.gallery-thumb img {
+  width: 100%;
+  aspect-ratio: 59 / 86;
+  object-fit: cover;
+  border-radius: 6px;
+  background: var(--pico-card-sectioning-background-color);
+  display: block;
+}
+
+.gallery-qty {
+  position: absolute;
+  top: 0.25rem;
+  right: 0.25rem;
+  background: var(--pico-primary);
+  color: var(--pico-primary-inverse);
+  border-radius: 999px;
+  padding: 0.1rem 0.55rem;
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.gallery-caption {
+  font-size: 0.8rem;
+  margin-block-start: 0.35rem;
+  line-height: 1.25;
+}
+
+.pagination {
+  display: flex;
+  justify-content: space-between;
+  margin-block: 1rem;
+}

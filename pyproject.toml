@@ -40,9 +40,12 @@ dev = [
     "ruff>=0.5",
     "mypy>=1.10",
 ]
+# Empacotamento do .exe desktop (packaging/yugioh_scanner_web.spec).
+build = ["pyinstaller>=6.0"]
 
 [project.scripts]
 yugioh-scanner = "yugioh_scanner.cli.main:run"
+yugioh-scanner-desktop = "yugioh_scanner.desktop_launcher:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/yugioh_scanner"]

@@ -27,13 +27,20 @@ def _filters(request: Request) -> dict[str, object]:
         "no_set": q.get("no_set") in ("1", "true", "on"),
         "sort": q.get("sort") or "name",
         "descending": q.get("desc") in ("1", "true", "on"),
+        "view": q.get("view") if q.get("view") in ("table", "gallery") else "table",
     }
+
+
+def _service_filters(filters: dict[str, object]) -> dict[str, object]:
+    """Só os filtros que `CollectionService.list_items` conhece — `view` é
+    detalhe de apresentação da Web, não existe do lado do serviço."""
+    return {k: v for k, v in filters.items() if k != "view"}
 
 
 @router.get("", response_class=HTMLResponse)
 def collection_page(request: Request, collection: CollectionServiceDep) -> HTMLResponse:
     filters = _filters(request)
-    items = collection.list_items(**filters, limit=200)  # type: ignore[arg-type]
+    items = collection.list_items(**_service_filters(filters), limit=200)  # type: ignore[arg-type]
     templates = request.app.state.templates
     return templates.TemplateResponse(
         request,
@@ -49,9 +56,11 @@ def collection_page(request: Request, collection: CollectionServiceDep) -> HTMLR
 @router.get("/rows", response_class=HTMLResponse)
 def collection_rows(request: Request, collection: CollectionServiceDep) -> HTMLResponse:
     filters = _filters(request)
-    items = collection.list_items(**filters, limit=200)  # type: ignore[arg-type]
+    items = collection.list_items(**_service_filters(filters), limit=200)  # type: ignore[arg-type]
     templates = request.app.state.templates
-    return templates.TemplateResponse(request, "partials/collection_rows.html", {"items": items})
+    return templates.TemplateResponse(
+        request, "partials/collection_results.html", {"items": items, "filters": filters}
+    )
 
 
 def _row_response(request: Request, item: object) -> HTMLResponse:

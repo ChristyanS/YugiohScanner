@@ -17,6 +17,10 @@
       <option value="set" {% if filters.sort == "set" %}selected{% endif %}>Set</option>
     </select>
     <label><input type="checkbox" name="desc" class="filter" value="1" {% if filters.descending %}checked{% endif %}> Decrescente</label>
+    <select name="view" class="filter">
+      <option value="table" {% if filters.view == "table" %}selected{% endif %}>☰ Lista</option>
+      <option value="gallery" {% if filters.view == "gallery" %}selected{% endif %}>▦ Galeria</option>
+    </select>
   </div>
 </form>
 
@@ -36,6 +40,6 @@
 </details>
 
 <div id="results">
-  {% include "partials/collection_rows.html" %}
+  {% include "partials/collection_results.html" %}
 </div>
 {% endblock %}

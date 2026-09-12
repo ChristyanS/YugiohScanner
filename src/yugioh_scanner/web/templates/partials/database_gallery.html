@@ -1,0 +1,12 @@
+<div class="gallery-grid">
+  {% for card in cards %}
+  <a class="gallery-item" href="/cards/{{ card.id }}" title="{{ card.name }}">
+    <div class="gallery-thumb">
+      <img src="/api/v1/cards/{{ card.id }}/image?size=small" loading="lazy" alt="{{ card.name }}">
+    </div>
+    <span class="gallery-caption">{{ card.name }}</span>
+  </a>
+  {% else %}
+  <p><em>Nenhuma carta encontrada.</em></p>
+  {% endfor %}
+</div>

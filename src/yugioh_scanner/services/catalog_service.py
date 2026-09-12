@@ -38,6 +38,9 @@ class CatalogService:
             raise CardNotFoundError(f"Carta #{card_id} não encontrada no catálogo.")
         return card
 
+    def count_cards(self, query: str | None = None, *, set_prefix: str | None = None) -> int:
+        return self.cards.count(query, set_prefix=set_prefix)
+
     def prints_for_card(self, card_id: int) -> list[CardPrint]:
         return self.cards.prints_for(card_id)
 

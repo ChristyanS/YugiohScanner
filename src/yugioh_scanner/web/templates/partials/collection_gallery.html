@@ -1,0 +1,13 @@
+<div class="gallery-grid">
+  {% for item in items %}
+  <a class="gallery-item" href="/cards/{{ item.card_id }}" title="{{ item.card.name }}">
+    <div class="gallery-thumb">
+      <img src="/api/v1/cards/{{ item.card_id }}/image?size=small" loading="lazy" alt="{{ item.card.name }}">
+      <span class="gallery-qty">x{{ item.quantity }}</span>
+    </div>
+    <span class="gallery-caption">{{ item.card.name }}</span>
+  </a>
+  {% else %}
+  <p><em>Nenhum item bate com o filtro.</em></p>
+  {% endfor %}
+</div>

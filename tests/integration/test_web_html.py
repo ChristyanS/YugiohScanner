@@ -118,6 +118,82 @@ def _sdk_print_id(client: TestClient) -> int:
     return next(p["id"] for p in card["prints"] if p["set_code"] == "SDK-001")
 
 
+class TestDatabaseScreen:
+    """`/cards` — banco de dados completo (Fase 2 do faseamento web)."""
+
+    def test_page_lists_the_whole_catalog_not_just_the_collection(
+        self, client: TestClient
+    ) -> None:
+        # Nada foi adicionado à coleção — a tela de banco de dados mostra o
+        # catálogo mesmo assim, ao contrário de `/collection`.
+        response = client.get("/cards")
+        assert response.status_code == 200
+        assert "Dark Magician" in response.text
+        assert "Blue-Eyes White Dragon" in response.text
+
+    def test_table_view_is_the_default(self, client: TestClient) -> None:
+        response = client.get("/cards")
+        assert "<table>" in response.text
+        assert 'class="gallery-grid"' not in response.text
+
+    def test_gallery_view_renders_images(self, client: TestClient) -> None:
+        response = client.get("/cards", params={"view": "gallery"})
+        assert response.status_code == 200
+        assert 'class="gallery-grid"' in response.text
+        assert "/image?size=small" in response.text
+
+    def test_search_filters_by_name(self, client: TestClient) -> None:
+        response = client.get("/cards", params={"q": "dragon"})
+        assert "Blue-Eyes White Dragon" in response.text
+        assert "Pot of Greed" not in response.text
+
+    def test_set_filter(self, client: TestClient) -> None:
+        response = client.get("/cards", params={"set": "SDK"})
+        assert "Dark Magician" in response.text  # tem print SDK-001
+        assert "Pot of Greed" not in response.text  # sem print nesse set
+
+    def test_rows_partial_used_by_htmx(self, client: TestClient) -> None:
+        response = client.get("/cards/rows", params={"q": "magician"})
+        assert response.status_code == 200
+        assert "Dark Magician" in response.text
+        # É um fragmento — não a página inteira com <nav> do menu.
+        assert "<html" not in response.text
+
+    def test_pagination_splits_results_across_pages(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from yugioh_scanner.web.routes import cards as cards_module
+
+        monkeypatch.setattr(cards_module, "_PAGE_SIZE_TABLE", 2)
+
+        page1 = client.get("/cards", params={"page": 1})
+        assert "página 1 de 3" in page1.text
+        assert "Próxima" in page1.text
+        assert "Anterior" not in page1.text
+
+        page2 = client.get("/cards", params={"page": 2})
+        assert "página 2 de 3" in page2.text
+        assert "Anterior" in page2.text
+        assert "Próxima" in page2.text
+
+
+class TestCollectionGalleryView:
+    def test_gallery_view_shows_quantity_and_image(self, client: TestClient) -> None:
+        client.post("/api/v1/collection", json={"name": "Dark Magician", "quantity": 3})
+        response = client.get("/collection", params={"view": "gallery"})
+        assert response.status_code == 200
+        assert 'class="gallery-grid"' in response.text
+        assert "x3" in response.text
+        assert "Dark Magician" in response.text
+
+    def test_gallery_rows_partial_respects_filters(self, client: TestClient) -> None:
+        client.post("/api/v1/collection", json={"name": "Dark Magician"})
+        client.post("/api/v1/collection", json={"name": "Pot of Greed"})
+        response = client.get("/collection/rows", params={"search": "dark", "view": "gallery"})
+        assert "Dark Magician" in response.text
+        assert "Pot of Greed" not in response.text
+
+
 class TestScanDetailPage:
     def test_404_for_unknown_job_is_handled_cleanly(self, client: TestClient) -> None:
         response = client.get("/scan/999999")

@@ -16,11 +16,11 @@ from alembic.runtime.migration import MigrationContext
 from alembic.script import ScriptDirectory
 from sqlalchemy import Engine
 
-from ..config import PROJECT_ROOT, Settings
+from ..config import RESOURCES_ROOT, Settings
 from ..errors import SchemaOutdatedError
 
-ALEMBIC_INI = PROJECT_ROOT / "alembic.ini"
-MIGRATIONS_DIR = PROJECT_ROOT / "migrations"
+ALEMBIC_INI = RESOURCES_ROOT / "alembic.ini"
+MIGRATIONS_DIR = RESOURCES_ROOT / "migrations"
 
 
 def make_alembic_config(database_url: str) -> Config:

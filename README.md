@@ -295,6 +295,37 @@ em `config show`: se configurado, só pastas dentro dele são aceitas (plano
 segredos e o logger redige o padrão `sk-ant-*` automaticamente. Se você vir
 uma chave completa em algum lugar, é um bug — abra uma issue.
 
+## .exe desktop (Windows, opcional)
+
+Alternativa ao `pip install` + `yugioh-scanner web` para quem só quer clicar
+e usar: um `.exe` único que sobe a interface Web e abre o navegador sozinho.
+Não precisa de Python instalado na máquina que só vai *rodar* o `.exe` — só
+para *gerar* ele.
+
+Gerar o `.exe` (precisa do venv de desenvolvimento com as dependências
+`[web,ocr]` já instaladas):
+
+```powershell
+pip install -e ".[build]"
+pyinstaller packaging/yugioh_scanner_web.spec --noconfirm
+```
+
+O resultado fica em `dist/YugiohScanner.exe` (build onefile, ~110 MB — inclui
+o motor de OCR). Ao rodar:
+
+- **Primeira execução:** cria o banco e baixa o catálogo completo do
+  YGOPRODeck (progresso aparece no console; leva alguns minutos). Nas
+  próximas, só sobe o servidor.
+- **Dados do usuário** (banco, imagens, logs) ficam em
+  `%APPDATA%\YugiohScanner\data`, não na pasta onde o `.exe` está nem na
+  pasta temporária de extração — sobrevivem a atualizações do `.exe`.
+- Abre `http://127.0.0.1:8000` automaticamente no navegador padrão. Fechar a
+  janela do console encerra o servidor.
+
+Ver `packaging/yugioh_scanner_web.spec` para os detalhes de empacotamento
+(por que onefile, por que os dados do RapidOCR precisam ser incluídos à
+mão, etc.).
+
 ## Docker (opcional, não verificado)
 
 ```bash

@@ -1,0 +1,25 @@
+<p>
+  {{ total }} carta{{ "s" if total != 1 else "" }} encontrada{{ "s" if total != 1 else "" }}
+  &mdash; página {{ filters.page }} de {{ total_pages }}
+</p>
+
+{% if filters.view == "gallery" %}
+{% include "partials/database_gallery.html" %}
+{% else %}
+{% include "partials/database_rows.html" %}
+{% endif %}
+
+<nav class="pagination">
+  <span>
+    {% if filters.page > 1 %}
+    <a href="#" hx-get="/cards/rows?q={{ (filters.search or '') | urlencode }}&set={{ (filters.set_prefix or '') | urlencode }}&view={{ filters.view }}&page={{ filters.page - 1 }}"
+       hx-target="#db-results" hx-push-url="true">&larr; Anterior</a>
+    {% endif %}
+  </span>
+  <span>
+    {% if filters.page < total_pages %}
+    <a href="#" hx-get="/cards/rows?q={{ (filters.search or '') | urlencode }}&set={{ (filters.set_prefix or '') | urlencode }}&view={{ filters.view }}&page={{ filters.page + 1 }}"
+       hx-target="#db-results" hx-push-url="true">Próxima &rarr;</a>
+    {% endif %}
+  </span>
+</nav>

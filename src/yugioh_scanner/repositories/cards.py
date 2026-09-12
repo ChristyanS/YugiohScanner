@@ -6,11 +6,18 @@ o que fazer quando nada é encontrado. Isto aqui só traduz consulta em SQL.
 
 from __future__ import annotations
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ..db.fts import search_card_ids
 from ..db.tables import Card, CardPrint
+
+#: Teto de candidatos considerados para uma busca textual (usado tanto para
+#: paginar quanto para contar). Sem teto, uma query genérica ("dragon") teria
+#: que varrer o índice FTS inteiro só para saber "quantas páginas existem" —
+#: ninguém rola até a página 200 de um resultado de busca, então um teto
+#: generoso é mais barato que exatidão que ninguém usa.
+_SEARCH_FETCH_CAP = 500
 
 
 class CardRepository:
@@ -58,3 +65,26 @@ class CardRepository:
             stmt = stmt.join(CardPrint).where(CardPrint.set_prefix == set_prefix.upper())
         stmt = stmt.distinct().offset(offset).limit(limit)
         return list(self.session.scalars(stmt))
+
+    def count(self, query: str | None = None, *, set_prefix: str | None = None) -> int:
+        """Total de cartas que `search()` encontraria, para paginação.
+
+        Com `query`: conta dentro do mesmo teto de candidatos que `search()`
+        usa (`_SEARCH_FETCH_CAP`) — resultado de busca textual não precisa de
+        contagem exata além disso (ver docstring do teto). Sem `query`
+        (navegação alfabética do catálogo inteiro): conta de verdade, é uma
+        soma barata com os índices existentes.
+        """
+        if query and query.strip():
+            ids = search_card_ids(self.session, query, limit=_SEARCH_FETCH_CAP)
+            if not ids:
+                return 0
+            stmt = select(func.count(func.distinct(Card.id))).where(Card.id.in_(ids))
+            if set_prefix:
+                stmt = stmt.join(CardPrint).where(CardPrint.set_prefix == set_prefix.upper())
+            return int(self.session.scalar(stmt) or 0)
+
+        stmt = select(func.count(func.distinct(Card.id)))
+        if set_prefix:
+            stmt = stmt.join(CardPrint).where(CardPrint.set_prefix == set_prefix.upper())
+        return int(self.session.scalar(stmt) or 0)

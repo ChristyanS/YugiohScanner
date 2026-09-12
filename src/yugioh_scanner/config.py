@@ -9,6 +9,7 @@ injeção ou chama `get_settings()`.
 from __future__ import annotations
 
 import os
+import sys
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
@@ -26,8 +27,29 @@ LogFormat = Literal["console", "json"]
 #: A validação acontece onde o nome é usado, com erro que lista os disponíveis.
 BUILTIN_OCR_PROVIDERS = ("rapidocr", "tesseract", "paddle", "easyocr", "claude")
 
-#: Raiz do projeto (…/src/yugioh_scanner/config.py -> …/)
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+def _detect_roots() -> tuple[Path, Path]:
+    """(âncora para paths relativos do usuário, raiz dos recursos empacotados).
+
+    Rodando de código-fonte, as duas coincidem: a raiz do projeto (…/
+    src/yugioh_scanner/config.py -> …/). Dentro do .exe (PyInstaller
+    onefile), `RESOURCES_ROOT` é a pasta temporária onde o bundle foi
+    extraído (`sys._MEIPASS`) — correta para achar `migrations/`,
+    `alembic.ini` e os templates/estáticos da web, mas efêmera, então
+    **não** serve para dados do usuário. Estes ficam em `%APPDATA%`, que
+    sobrevive entre execuções e updates do .exe (plano da Fase de
+    empacotamento web).
+    """
+    if getattr(sys, "frozen", False):
+        resources = Path(getattr(sys, "_MEIPASS", Path(sys.executable).resolve().parent))
+        appdata = Path(os.environ.get("APPDATA", Path.home()))
+        return appdata / "YugiohScanner", resources
+    root = Path(__file__).resolve().parents[2]
+    return root, root
+
+
+#: Âncora para resolver paths relativos do usuário (`data_path`, etc.).
+#: Repo root em execução normal; `%APPDATA%/YugiohScanner` dentro do .exe.
+PROJECT_ROOT, RESOURCES_ROOT = _detect_roots()
 
 #: Teto absoluto de workers.
 MAX_WORKERS = 8
