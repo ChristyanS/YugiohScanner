@@ -1,10 +1,11 @@
 <div class="gallery-grid">
   {% for card in cards %}
-  <a class="gallery-item" href="/cards/{{ card.id }}" title="{{ card.name }}">
+  {% set display_name = display_names.get(card.id, card.name) %}
+  <a class="gallery-item" href="/cards/{{ card.id }}?lang={{ filters.lang }}" title="{{ display_name }}">
     <div class="gallery-thumb">
-      <img src="/api/v1/cards/{{ card.id }}/image?size=small" loading="lazy" alt="{{ card.name }}">
+      <img src="/api/v1/cards/{{ card.id }}/image?size=small" loading="lazy" alt="{{ display_name }}">
     </div>
-    <span class="gallery-caption">{{ card.name }}</span>
+    <span class="gallery-caption">{{ display_name }}</span>
   </a>
   {% else %}
   <p><em>Nenhuma carta encontrada.</em></p>

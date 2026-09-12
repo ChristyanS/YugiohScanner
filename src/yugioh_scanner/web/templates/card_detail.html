@@ -1,17 +1,28 @@
 {% extends "base.html" %}
-{% block title %}{{ card.name }} — Yu-Gi-Oh! Scanner{% endblock %}
+{% block title %}{{ localized.name }} — Yu-Gi-Oh! Scanner{% endblock %}
 {% block content %}
 <a href="/collection">&larr; coleção</a>
+
+<nav class="lang-switch">
+  {% for code in languages %}
+  <a href="/cards/{{ card.id }}?lang={{ code }}" role="button"
+     class="{{ '' if lang == code else 'outline' }}{{ ' lang-unavailable' if code not in available_languages else '' }}">{{ code }}</a>
+  {% endfor %}
+</nav>
+{% if not localized.is_translated and lang != "EN" %}
+<p><small><em>Tradução para {{ lang }} não disponível — mostrando em inglês.</em></small></p>
+{% endif %}
+
 <div class="grid">
   <div>
-    <img src="/api/v1/cards/{{ card.id }}/image?size=full" alt="{{ card.name }}" style="max-width: 300px;">
+    <img src="/api/v1/cards/{{ card.id }}/image?size=full" alt="{{ localized.name }}" style="max-width: 300px;">
   </div>
   <div>
-    <h1>{{ card.name }}</h1>
+    <h1>{{ localized.name }}</h1>
     <p><strong>Tipo:</strong> {{ card.type }}{% if card.attribute %} &middot; <strong>Atributo:</strong> {{ card.attribute }}{% endif %}</p>
     {% if card.atk is not none %}<p><strong>ATK/DEF:</strong> {{ card.atk }}/{{ card.def }}{% if card.level %} &middot; <strong>Nível:</strong> {{ card.level }}{% endif %}</p>{% endif %}
     {% if card.archetype %}<p><strong>Arquétipo:</strong> {{ card.archetype }}</p>{% endif %}
-    <p>{{ card.desc }}</p>
+    <p>{{ localized.desc }}</p>
     <p><strong>Você possui: {{ total_owned }} cópia(s)</strong></p>
   </div>
 </div>

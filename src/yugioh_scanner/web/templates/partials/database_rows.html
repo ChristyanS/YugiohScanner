@@ -6,7 +6,7 @@
     {% for card in cards %}
     <tr>
       <td><img class="thumb" src="/api/v1/cards/{{ card.id }}/image?size=small" loading="lazy" alt=""></td>
-      <td><a href="/cards/{{ card.id }}">{{ card.name }}</a></td>
+      <td><a href="/cards/{{ card.id }}?lang={{ filters.lang }}">{{ display_names.get(card.id, card.name) }}</a></td>
       <td>{{ card.human_readable_type or card.type }}</td>
       <td>{{ card.attribute or "" }}</td>
       <td>{{ card.archetype or "" }}</td>

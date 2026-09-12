@@ -11,7 +11,17 @@ yugioh_scanner.desktop_launcher`, que é exatamente o que isto reproduz.
 
 from __future__ import annotations
 
-from yugioh_scanner.desktop_launcher import main
+import multiprocessing
 
 if __name__ == "__main__":
+    # Precisa vir antes de qualquer outra coisa: no `.exe` (PyInstaller,
+    # onefile) o `spawn` do multiprocessing relança este mesmo executável
+    # como processo filho. Sem isto, o filho não reconhece que deveria
+    # rodar como worker — ele executa `main()` de novo (sobe outro servidor
+    # Web, tenta abrir a mesma porta) e morre, e o pool então quebra com
+    # "A process in the process pool was terminated abruptly...".
+    multiprocessing.freeze_support()
+
+    from yugioh_scanner.desktop_launcher import main
+
     raise SystemExit(main())

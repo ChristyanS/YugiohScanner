@@ -210,6 +210,35 @@ class TestCollectionCrud:
         # LOB-001 tem duas raridades na fixture (plano §0.3.3) — ambíguo de propósito.
         assert response.status_code == 409
 
+    def test_add_by_card_print_id(self, client: TestClient) -> None:
+        """Fase 3 do faseamento web: a tela `/collection` manda o `id` do
+        print escolhido direto, em vez de reabrir a resolução por código."""
+        card = client.get(f"/api/v1/cards/{DARK_MAGICIAN}").json()
+        sdk_print_id = next(p["id"] for p in card["prints"] if p["set_code"] == "SDK-001")
+
+        added = client.post(
+            "/api/v1/collection",
+            json={"name": "Dark Magician", "card_print_id": sdk_print_id, "quantity": 2},
+        ).json()
+        assert added["card_print_id"] == sdk_print_id
+        assert added["quantity"] == 2
+
+    def test_add_by_card_print_id_from_another_card_is_rejected(self, client: TestClient) -> None:
+        dark_magician = client.get(f"/api/v1/cards/{DARK_MAGICIAN}").json()
+        sdk_print_id = next(p["id"] for p in dark_magician["prints"] if p["set_code"] == "SDK-001")
+
+        response = client.post(
+            "/api/v1/collection",
+            json={"name": "Blue-Eyes White Dragon", "card_print_id": sdk_print_id},
+        )
+        # `PrintNotFoundForCardError` é 409, não 404: a carta existe, o print
+        # existe — a combinação dos dois é que não faz sentido.
+        assert response.status_code == 409
+
+    def test_add_by_translated_name(self, client: TestClient) -> None:
+        added = client.post("/api/v1/collection", json={"name": "Mago Negro"}).json()
+        assert added["card_id"] == DARK_MAGICIAN
+
 
 class TestExport:
     def test_default_csv_profile(self, client: TestClient) -> None:

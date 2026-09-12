@@ -168,3 +168,18 @@ progress { width: 100%; }
   justify-content: space-between;
   margin-block: 1rem;
 }
+
+.lang-switch {
+  display: flex;
+  gap: 0.4rem;
+  margin-block: 0.75rem;
+}
+
+.lang-switch a[role="button"] {
+  padding: 0.25rem 0.75rem;
+  margin: 0;
+}
+
+.lang-switch a.lang-unavailable {
+  opacity: 0.5;
+}

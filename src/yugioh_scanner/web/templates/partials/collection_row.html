@@ -1,6 +1,8 @@
+{% set display_name = display_name | default(item.card.name) %}
+{% set lang = lang | default("EN") %}
 <tr id="item-{{ item.id }}">
   <td><img class="thumb" src="/api/v1/cards/{{ item.card_id }}/image?size=small" loading="lazy" alt=""></td>
-  <td><a href="/cards/{{ item.card_id }}">{{ item.card.name }}</a></td>
+  <td><a href="/cards/{{ item.card_id }}?lang={{ lang }}">{{ display_name }}</a></td>
   <td>
     {% if item.card_print %}
       {{ item.card_print.set_code_full }}
@@ -18,18 +20,18 @@
   <td>{{ item.card_print.rarity if item.card_print else "" }}</td>
   <td>
     <button class="outline"
-            hx-post="/collection/{{ item.id }}/quantity?delta=-1"
+            hx-post="/collection/{{ item.id }}/quantity?delta=-1&lang={{ lang }}"
             hx-target="#item-{{ item.id }}" hx-swap="outerHTML">-</button>
     {{ item.quantity }}
     <button class="outline"
-            hx-post="/collection/{{ item.id }}/quantity?delta=1"
+            hx-post="/collection/{{ item.id }}/quantity?delta=1&lang={{ lang }}"
             hx-target="#item-{{ item.id }}" hx-swap="outerHTML">+</button>
   </td>
   <td>{{ item.source }}</td>
   <td>
     <button class="contrast outline"
             hx-delete="/collection/{{ item.id }}"
-            hx-confirm="Remover {{ item.card.name }} da coleção?"
+            hx-confirm="Remover {{ display_name }} da coleção?"
             hx-target="#item-{{ item.id }}" hx-swap="outerHTML">remover</button>
   </td>
 </tr>

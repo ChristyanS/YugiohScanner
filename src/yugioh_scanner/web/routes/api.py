@@ -292,6 +292,10 @@ def list_collection(
 class CollectionAddBody(BaseModel):
     name: str
     set_code: str | None = None
+    #: Alternativa a `set_code`: usada pela tela `/collection` (Fase 3), que já
+    #: sabe o `id` exato do print escolhido (veio de `/api/v1/cards/{id}`) e
+    #: não precisa reabrir a resolução por código.
+    card_print_id: int | None = None
     quantity: int = Field(default=1, ge=1)
     condition: str = "Near Mint"
     edition: str = "Unlimited"
@@ -306,6 +310,7 @@ def add_collection_item(
     item = collection.add_manual(
         body.name,
         set_code=body.set_code,
+        card_print_id=body.card_print_id,
         quantity=body.quantity,
         condition=body.condition,
         edition=body.edition,

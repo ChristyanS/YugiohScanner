@@ -72,6 +72,34 @@ class TestAddManual:
             service.add_manual("Blue-Eyes White Dragon", set_code="LOB-001")
         assert len(exc.value.candidates) == 2
 
+    def test_translated_name_resolves_the_card(self, service: CollectionService) -> None:
+        """Fase 3 do faseamento web: adicionar digitando o nome traduzido
+        (PT tem fixture real; ver `tests/fixtures/api/cards_page1_pt.json`)."""
+        item = service.add_manual("Mago Negro")
+        assert item.card_id == DARK_MAGICIAN
+
+    def test_card_print_id_resolves_the_print(self, service: CollectionService) -> None:
+        """Alternativa a `set_code`: a tela `/collection` já sabe o `id`
+        exato do print escolhido e manda ele direto, sem reabrir a
+        resolução por código (Fase 3)."""
+        by_code = service.add_manual("Dark Magician", set_code="SDK-001")
+        assert by_code.card_print_id is not None
+
+        # Mesmo print, mesmo item (upsert por chave lógica) — só provando que
+        # `card_print_id` chega ao mesmo resultado que `set_code` chegaria.
+        by_id = service.add_manual("Dark Magician", card_print_id=by_code.card_print_id)
+        assert by_id.card_print_id == by_code.card_print_id
+        assert by_id.id == by_code.id
+
+    def test_card_print_id_must_belong_to_the_resolved_card(
+        self, service: CollectionService
+    ) -> None:
+        dark_magician_print = service.add_manual("Dark Magician", set_code="SDK-001")
+        with pytest.raises(PrintNotFoundForCardError):
+            service.add_manual(
+                "Blue-Eyes White Dragon", card_print_id=dark_magician_print.card_print_id
+            )
+
     def test_notes_are_stored(self, service: CollectionService) -> None:
         item = service.add_manual("Pot of Greed", notes="comprada na loja X")
         assert item.notes == "comprada na loja X"

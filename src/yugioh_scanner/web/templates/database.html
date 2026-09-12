@@ -13,6 +13,11 @@
       <option value="table" {% if filters.view == "table" %}selected{% endif %}>☰ Lista</option>
       <option value="gallery" {% if filters.view == "gallery" %}selected{% endif %}>▦ Galeria</option>
     </select>
+    <select name="lang" class="db-filter" title="Idioma de exibição dos nomes">
+      {% for code in languages %}
+      <option value="{{ code }}" {% if filters.lang == code %}selected{% endif %}>{{ code }}</option>
+      {% endfor %}
+    </select>
   </div>
   <input type="hidden" name="page" value="1">
 </form>

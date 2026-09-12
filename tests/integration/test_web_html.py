@@ -177,6 +177,73 @@ class TestDatabaseScreen:
         assert "Próxima" in page2.text
 
 
+class TestMultilingualCatalog:
+    """Fase 3 do faseamento web: busca e exibição em outros idiomas.
+
+    A fixture compartilhada (`catalog_template`) sincroniza PT de verdade
+    (via `tests/fixtures/api/cards_page1_pt.json`) e os demais idiomas
+    alternativos com uma resposta vazia — dá pra testar tanto "tem tradução"
+    quanto "não tem, cai para inglês" sem massa de dados extra.
+    """
+
+    def test_search_by_translated_name_finds_the_card(self, client: TestClient) -> None:
+        # "Mago Negro" é como a API PT chama o Dark Magician — a busca em
+        # inglês não bateria com isso antes da Fase 3.
+        response = client.get("/cards", params={"q": "Mago Negro"})
+        assert response.status_code == 200
+        assert "Dark Magician" in response.text
+
+    def test_search_by_translated_name_in_manual_search_too(self, client: TestClient) -> None:
+        response = client.get("/api/v1/cards", params={"q": "Mago Negro"})
+        assert response.status_code == 200
+        names = [card["name"] for card in response.json()]
+        assert "Dark Magician" in names
+
+    def test_detail_page_shows_translated_name_and_description(self, client: TestClient) -> None:
+        response = client.get(f"/cards/{DARK_MAGICIAN}", params={"lang": "PT"})
+        assert response.status_code == 200
+        assert "Mago Negro" in response.text
+        assert "supremo mago" in response.text  # início da descrição em PT
+        assert "não disponível" not in response.text
+
+    def test_detail_page_falls_back_to_english_when_translation_missing(
+        self, client: TestClient
+    ) -> None:
+        # DE não tem fixture — a resposta mockada é vazia para esse idioma.
+        response = client.get(f"/cards/{DARK_MAGICIAN}", params={"lang": "DE"})
+        assert response.status_code == 200
+        assert "Dark Magician" in response.text
+        assert "não disponível" in response.text
+
+    def test_detail_page_defaults_to_english_without_lang_param(
+        self, client: TestClient
+    ) -> None:
+        response = client.get(f"/cards/{DARK_MAGICIAN}")
+        assert "Dark Magician" in response.text
+        assert "Mago Negro" not in response.text
+
+    def test_unknown_lang_param_is_ignored(self, client: TestClient) -> None:
+        response = client.get(f"/cards/{DARK_MAGICIAN}", params={"lang": "XX"})
+        assert response.status_code == 200
+        assert "Dark Magician" in response.text
+
+    def test_database_listing_shows_names_in_the_chosen_language(
+        self, client: TestClient
+    ) -> None:
+        response = client.get("/cards", params={"lang": "PT"})
+        assert response.status_code == 200
+        # O link usa o nome traduzido; "Dark Magician" ainda aparece na linha
+        # como valor do arquétipo (não traduzido pela API), então a asserção
+        # negativa mira o texto do link, não a página inteira.
+        assert ">Mago Negro</a>" in response.text
+        assert ">Dark Magician</a>" not in response.text
+
+    def test_database_listing_defaults_to_english(self, client: TestClient) -> None:
+        response = client.get("/cards")
+        assert "Dark Magician" in response.text
+        assert "Mago Negro" not in response.text
+
+
 class TestCollectionGalleryView:
     def test_gallery_view_shows_quantity_and_image(self, client: TestClient) -> None:
         client.post("/api/v1/collection", json={"name": "Dark Magician", "quantity": 3})
@@ -192,6 +259,67 @@ class TestCollectionGalleryView:
         response = client.get("/collection/rows", params={"search": "dark", "view": "gallery"})
         assert "Dark Magician" in response.text
         assert "Pot of Greed" not in response.text
+
+
+class TestCollectionMultilingual:
+    """Fase 3 do faseamento web, extensão para a coleção: buscar e exibir em
+    qualquer idioma sincronizado, não só no banco de dados geral."""
+
+    def test_search_by_translated_name_finds_the_item(self, client: TestClient) -> None:
+        client.post("/api/v1/collection", json={"name": "Dark Magician"})
+        response = client.get("/collection", params={"search": "Mago Negro"})
+        assert response.status_code == 200
+        assert "Dark Magician" in response.text
+
+    def test_rows_partial_search_by_translated_name(self, client: TestClient) -> None:
+        client.post("/api/v1/collection", json={"name": "Dark Magician"})
+        client.post("/api/v1/collection", json={"name": "Pot of Greed"})
+        response = client.get("/collection/rows", params={"search": "Mago Negro"})
+        assert "Dark Magician" in response.text
+        assert "Pot of Greed" not in response.text
+
+    def test_listing_shows_name_in_the_chosen_language(self, client: TestClient) -> None:
+        client.post("/api/v1/collection", json={"name": "Dark Magician"})
+        response = client.get("/collection", params={"lang": "PT"})
+        assert response.status_code == 200
+        assert ">Mago Negro</a>" in response.text
+
+    def test_listing_defaults_to_english(self, client: TestClient) -> None:
+        client.post("/api/v1/collection", json={"name": "Dark Magician"})
+        response = client.get("/collection")
+        assert ">Dark Magician</a>" in response.text
+
+    def test_gallery_also_respects_the_chosen_language(self, client: TestClient) -> None:
+        client.post("/api/v1/collection", json={"name": "Dark Magician"})
+        response = client.get("/collection", params={"lang": "PT", "view": "gallery"})
+        assert "Mago Negro" in response.text
+
+    def test_inline_quantity_update_keeps_the_chosen_language(self, client: TestClient) -> None:
+        item = client.post("/api/v1/collection", json={"name": "Dark Magician"}).json()
+        response = client.post(
+            f"/collection/{item['id']}/quantity", params={"delta": 1, "lang": "PT"}
+        )
+        assert response.status_code == 200
+        assert "Mago Negro" in response.text
+        assert 'href="/cards/46986414?lang=PT"' in response.text
+
+
+class TestManualAddForm:
+    """Formulário "Adicionar carta manualmente" na tela `/collection`
+    (Fase 3): a lógica de resolução em si já é coberta por
+    `test_web_api.py::TestCollectionCrud` e `test_collection_service.py` —
+    aqui só garante que a tela expõe os controles que o JS depende."""
+
+    def test_page_renders_the_manual_add_controls(self, client: TestClient) -> None:
+        response = client.get("/collection")
+        assert response.status_code == 200
+        assert 'id="manual-add"' in response.text
+        assert 'id="add-search-input"' in response.text
+        assert 'id="add-print-select"' in response.text
+        # Os selects de condição/edição/idioma vêm do vocabulário real do
+        # banco (plano §4), não hardcoded na tela.
+        assert "Near Mint" in response.text
+        assert "1st Edition" in response.text
 
 
 class TestScanDetailPage:

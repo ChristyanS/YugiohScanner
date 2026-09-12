@@ -21,8 +21,53 @@
       <option value="table" {% if filters.view == "table" %}selected{% endif %}>☰ Lista</option>
       <option value="gallery" {% if filters.view == "gallery" %}selected{% endif %}>▦ Galeria</option>
     </select>
+    <select name="lang" class="filter" title="Idioma de exibição dos nomes">
+      {% for code in languages %}
+      <option value="{{ code }}" {% if filters.lang == code %}selected{% endif %}>{{ code }}</option>
+      {% endfor %}
+    </select>
   </div>
 </form>
+
+<details id="manual-add">
+  <summary>Adicionar carta manualmente</summary>
+  <p class="kbd-hint">Sem escanear: busque pelo nome (em qualquer idioma sincronizado), escolha o print e a quantidade.</p>
+  <input type="search" id="add-search-input" placeholder="Nome da carta...">
+  <ul id="add-search-results" class="candidate-list"></ul>
+
+  <div id="add-selected" hidden>
+    <p><strong>Selecionada:</strong> <span id="add-selected-name"></span></p>
+    <div class="grid">
+      <label>Set
+        <select id="add-print-select">
+          <option value="">(set indefinido)</option>
+        </select>
+      </label>
+      <label>Quantidade
+        <input type="number" id="add-quantity" value="1" min="1">
+      </label>
+    </div>
+    <div class="grid">
+      <label>Condição
+        <select id="add-condition">
+          {% for c in conditions %}<option value="{{ c }}">{{ c }}</option>{% endfor %}
+        </select>
+      </label>
+      <label>Edição
+        <select id="add-edition">
+          {% for e in editions %}<option value="{{ e }}">{{ e }}</option>{% endfor %}
+        </select>
+      </label>
+      <label>Idioma da carta física
+        <select id="add-language">
+          {% for code in languages %}<option value="{{ code }}">{{ code }}</option>{% endfor %}
+        </select>
+      </label>
+    </div>
+    <div id="add-error"></div>
+    <button id="add-submit" type="button">Adicionar à coleção</button>
+  </div>
+</details>
 
 <details>
   <summary>Exportar</summary>
@@ -42,4 +87,103 @@
 <div id="results">
   {% include "partials/collection_results.html" %}
 </div>
+
+<script>
+(function () {
+  const searchInput = document.getElementById("add-search-input");
+  const resultsList = document.getElementById("add-search-results");
+  const selectedBox = document.getElementById("add-selected");
+  const selectedName = document.getElementById("add-selected-name");
+  const printSelect = document.getElementById("add-print-select");
+  const quantityInput = document.getElementById("add-quantity");
+  const conditionSelect = document.getElementById("add-condition");
+  const editionSelect = document.getElementById("add-edition");
+  const languageSelect = document.getElementById("add-language");
+  const errorBox = document.getElementById("add-error");
+  const submitButton = document.getElementById("add-submit");
+  const detailsEl = document.getElementById("manual-add");
+
+  let selectedCard = null;
+  let searchTimer = null;
+
+  function showError(message, hint) {
+    errorBox.innerHTML = message
+      ? `<div class="error-box"><strong>${message}</strong>${hint ? "<br><small>" + hint + "</small>" : ""}</div>`
+      : "";
+  }
+
+  function clearSelectionHighlight() {
+    [...resultsList.children].forEach((li) => li.classList.remove("selected"));
+  }
+
+  async function runSearch(query) {
+    if (!query.trim()) { resultsList.innerHTML = ""; return; }
+    const res = await fetch(`/api/v1/cards?q=${encodeURIComponent(query)}&limit=10`);
+    const cards = await res.json();
+    resultsList.innerHTML = "";
+    if (!cards.length) {
+      resultsList.innerHTML = "<li><em>Nenhuma carta encontrada.</em></li>";
+      return;
+    }
+    cards.forEach((card) => {
+      const li = document.createElement("li");
+      li.innerHTML = `<img class="thumb" src="/api/v1/cards/${card.id}/image?size=small" loading="lazy" alt="">
+        <strong>${card.name}</strong>`;
+      li.addEventListener("click", () => selectCard(card, li));
+      resultsList.appendChild(li);
+    });
+  }
+
+  async function selectCard(card, li) {
+    clearSelectionHighlight();
+    if (li) li.classList.add("selected");
+    selectedCard = card;
+    selectedName.textContent = card.name;
+    showError("");
+
+    const res = await fetch(`/api/v1/cards/${card.id}`);
+    const full = await res.json();
+    printSelect.innerHTML = '<option value="">(set indefinido)</option>' +
+      full.prints.map((p) => `<option value="${p.id}">${p.set_code} — ${p.rarity || "?"}</option>`).join("");
+    selectedBox.hidden = false;
+  }
+
+  searchInput.addEventListener("input", () => {
+    clearTimeout(searchTimer);
+    const query = searchInput.value;
+    searchTimer = setTimeout(() => runSearch(query), 300);
+  });
+
+  submitButton.addEventListener("click", async () => {
+    if (!selectedCard) { showError("Escolha uma carta na busca acima."); return; }
+    const quantity = parseInt(quantityInput.value, 10) || 1;
+    const body = {
+      name: selectedCard.name,
+      quantity,
+      condition: conditionSelect.value,
+      edition: editionSelect.value,
+      language: languageSelect.value,
+    };
+    if (printSelect.value) body.card_print_id = parseInt(printSelect.value, 10);
+
+    const res = await fetch("/api/v1/collection", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const payload = await res.json();
+    if (!res.ok) { showError(payload.error || "Falha ao adicionar", payload.hint); return; }
+
+    // Reseta o formulário e recarrega a listagem com os filtros atuais
+    // (mesmo formulário de busca/idioma/visualização já em tela).
+    searchInput.value = "";
+    resultsList.innerHTML = "";
+    selectedBox.hidden = true;
+    selectedCard = null;
+    showError("");
+    detailsEl.open = false;
+    htmx.trigger(document.getElementById("filters"), "submit");
+  });
+})();
+</script>
 {% endblock %}

@@ -16,7 +16,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, ClassVar
 
-from sqlalchemy import select
+from sqlalchemy import exists, or_, select
 from sqlalchemy.orm import Session
 
 from ..db.tables import (
@@ -24,6 +24,7 @@ from ..db.tables import (
     DEFAULT_EDITION,
     DEFAULT_LANGUAGE,
     Card,
+    CardAltName,
     CardPrint,
     CollectionItem,
     utcnow,
@@ -273,7 +274,20 @@ class CollectionRepository:
         stmt = select(CollectionItem).join(Card).outerjoin(CollectionItem.card_print)
 
         if search:
-            stmt = stmt.where(Card.name_normalized.contains(normalize_strict(search)))
+            # Multilíngue desde a Fase 3 do faseamento web: bate tanto no nome
+            # canônico (inglês) quanto em qualquer tradução sincronizada
+            # (FR/DE/IT/PT) — quem tem a carta física em outro idioma pode
+            # digitar exatamente o que está impresso nela. `EXISTS` em vez de
+            # `join`: uma carta com 4 traduções não pode virar 4 linhas na
+            # coleção só porque a busca casou em mais de um idioma.
+            term = normalize_strict(search)
+            alt_match = exists(
+                select(CardAltName.id).where(
+                    CardAltName.card_id == Card.id,
+                    CardAltName.name_normalized.contains(term),
+                )
+            )
+            stmt = stmt.where(or_(Card.name_normalized.contains(term), alt_match))
         if set_prefix:
             stmt = stmt.where(CardPrint.set_prefix == set_prefix.strip().upper())
         if no_set:

@@ -4,6 +4,8 @@
   </thead>
   <tbody id="collection-rows">
     {% for item in items %}
+    {% set display_name = display_names.get(item.card_id, item.card.name) if display_names else item.card.name %}
+    {% set lang = filters.lang if filters else "EN" %}
     {% include "partials/collection_row.html" %}
     {% else %}
     <tr><td colspan="7"><em>Nenhum item bate com o filtro.</em></td></tr>

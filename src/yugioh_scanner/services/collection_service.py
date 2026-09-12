@@ -103,31 +103,51 @@ class CollectionService:
         name_query: str,
         *,
         set_code: str | None = None,
+        card_print_id: int | None = None,
         quantity: int = 1,
         condition: str = DEFAULT_CONDITION,
         edition: str = DEFAULT_EDITION,
         language: str = DEFAULT_LANGUAGE,
         notes: str | None = None,
     ) -> CollectionItem:
-        """Adiciona pelo nome digitado (plano §8: `collection add`).
+        """Adiciona pelo nome digitado (plano §8: `collection add`; também a
+        tela `/collection` — Fase 3 do faseamento web: adicionar sem escanear).
 
-        Resolve o nome contra o catálogo (exato primeiro, fuzzy depois) e,
-        se um `set_code` for dado, exige que ele pertença de fato à carta
-        resolvida — um código incorreto aqui é erro de digitação do usuário,
-        não uma leitura ruidosa de OCR, então não vira `NULL` em silêncio
+        Resolve o nome contra o catálogo (exato primeiro, fuzzy depois — os
+        dois já reconhecem nome em FR/DE/IT/PT, plano §7.1). Para o print,
+        aceita **um dos dois**: `card_print_id` quando quem chama já sabe
+        exatamente qual print é (a tela Web lista os prints da carta já
+        resolvida, então manda o `id` direto — sem reabrir ambiguidade de
+        código); `set_code` quando só o código é conhecido (`collection add
+        --set-code`). Os dois passam pela mesma validação: um print que não
+        pertence à carta resolvida é erro de digitação do usuário, não uma
+        leitura ruidosa de OCR, então nunca vira `NULL` em silêncio
         (diferente do comportamento do scanner, plano §7.2).
         """
         card = self._resolve_card(name_query)
-        card_print_id = self._resolve_print_for_card(card, set_code) if set_code else None
+        if card_print_id is not None:
+            resolved_print_id: int | None = self._validate_print_belongs_to_card(
+                card, card_print_id
+            )
+        elif set_code:
+            resolved_print_id = self._resolve_print_for_card(card, set_code)
+        else:
+            resolved_print_id = None
 
         key = CollectionKey(
             card_id=card.id,
-            card_print_id=card_print_id,
+            card_print_id=resolved_print_id,
             condition=condition,
             edition=edition,
             language=language,
         )
         return self.repo.add_copies(key, quantity, source="manual", notes=notes)
+
+    def _validate_print_belongs_to_card(self, card: Card, card_print_id: int) -> int:
+        valid_ids = {p.id for p in self.repo.prints_for_card(card.id)}
+        if card_print_id not in valid_ids:
+            raise PrintNotFoundForCardError(card.name, str(card_print_id))
+        return card_print_id
 
     def remove(self, item_id: int, quantity: int | None = None) -> int:
         return self.repo.remove_copies(item_id, quantity)

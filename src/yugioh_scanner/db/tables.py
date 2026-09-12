@@ -189,6 +189,12 @@ class CardAltName(Base):
     #: Mesma função de normalização usada em `Card.name_normalized` (plano
     #: §7.1) — ela já é agnóstica de idioma (NFKD + remoção de acento).
     name_normalized: Mapped[str] = mapped_column(String(255), nullable=False)
+    #: Descrição/texto da carta traduzido — a mesma resposta de
+    #: `cardinfo.php?language=...` que dá o nome também dá o texto (Fase 3 do
+    #: faseamento web: exibir a carta em qualquer idioma sincronizado, não só
+    #: usar a tradução para o matching do OCR). Vazio em bancos sincronizados
+    #: antes desta coluna existir, até o próximo `sync`.
+    desc: Mapped[str] = mapped_column(Text, nullable=False, default="")
 
     synced_at: Mapped[dt.datetime] = mapped_column(DateTime, nullable=False, default=utcnow)
 

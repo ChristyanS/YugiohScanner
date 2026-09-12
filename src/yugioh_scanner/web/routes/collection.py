@@ -8,18 +8,20 @@ mora aqui; só a tradução para fragmento de tabela.
 
 from __future__ import annotations
 
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse
 
+from ...db.tables import CONDITIONS, EDITIONS
 from ...exporters import known_profiles
+from ...services.catalog_service import DISPLAY_LANGUAGES, resolve_display_language
 from ..deps import CatalogServiceDep, CollectionServiceDep
 
 router = APIRouter(prefix="/collection")
 
 
-def _filters(request: Request) -> dict[str, object]:
+def _filters(request: Request) -> dict[str, Any]:
     q = request.query_params
     return {
         "search": q.get("search") or None,
@@ -28,56 +30,80 @@ def _filters(request: Request) -> dict[str, object]:
         "sort": q.get("sort") or "name",
         "descending": q.get("desc") in ("1", "true", "on"),
         "view": q.get("view") if q.get("view") in ("table", "gallery") else "table",
+        "lang": resolve_display_language(q.get("lang")),
     }
 
 
-def _service_filters(filters: dict[str, object]) -> dict[str, object]:
-    """Só os filtros que `CollectionService.list_items` conhece — `view` é
-    detalhe de apresentação da Web, não existe do lado do serviço."""
-    return {k: v for k, v in filters.items() if k != "view"}
+def _service_filters(filters: dict[str, Any]) -> dict[str, Any]:
+    """Só os filtros que `CollectionService.list_items` conhece — `view` e
+    `lang` são detalhe de apresentação da Web, não existem do lado do
+    serviço."""
+    return {k: v for k, v in filters.items() if k not in ("view", "lang")}
 
 
 @router.get("", response_class=HTMLResponse)
-def collection_page(request: Request, collection: CollectionServiceDep) -> HTMLResponse:
+def collection_page(
+    request: Request, collection: CollectionServiceDep, catalog: CatalogServiceDep
+) -> HTMLResponse:
     filters = _filters(request)
-    items = collection.list_items(**_service_filters(filters), limit=200)  # type: ignore[arg-type]
+    items = collection.list_items(**_service_filters(filters), limit=200)
+    display_names = catalog.display_names([item.card for item in items], filters["lang"])
     templates = request.app.state.templates
     return templates.TemplateResponse(
         request,
         "collection.html",
         {
             "items": items,
+            "display_names": display_names,
             "filters": filters,
             "export_profiles": known_profiles("csv"),
+            "languages": DISPLAY_LANGUAGES,
+            "conditions": CONDITIONS,
+            "editions": EDITIONS,
         },
     )
 
 
 @router.get("/rows", response_class=HTMLResponse)
-def collection_rows(request: Request, collection: CollectionServiceDep) -> HTMLResponse:
+def collection_rows(
+    request: Request, collection: CollectionServiceDep, catalog: CatalogServiceDep
+) -> HTMLResponse:
     filters = _filters(request)
-    items = collection.list_items(**_service_filters(filters), limit=200)  # type: ignore[arg-type]
+    items = collection.list_items(**_service_filters(filters), limit=200)
+    display_names = catalog.display_names([item.card for item in items], filters["lang"])
     templates = request.app.state.templates
     return templates.TemplateResponse(
-        request, "partials/collection_results.html", {"items": items, "filters": filters}
+        request,
+        "partials/collection_results.html",
+        {"items": items, "display_names": display_names, "filters": filters},
     )
 
 
-def _row_response(request: Request, item: object) -> HTMLResponse:
+def _row_response(request: Request, catalog: CatalogServiceDep, item: Any) -> HTMLResponse:
+    lang = resolve_display_language(request.query_params.get("lang"))
+    display_name = catalog.display_names([item.card], lang).get(item.card_id, item.card.name)
     templates = request.app.state.templates
-    return templates.TemplateResponse(request, "partials/collection_row.html", {"item": item})
+    return templates.TemplateResponse(
+        request,
+        "partials/collection_row.html",
+        {"item": item, "display_name": display_name, "lang": lang},
+    )
 
 
 @router.post("/{item_id}/quantity", response_class=HTMLResponse)
 def adjust_quantity(
-    item_id: int, request: Request, collection: CollectionServiceDep, delta: int = 0
+    item_id: int,
+    request: Request,
+    collection: CollectionServiceDep,
+    catalog: CatalogServiceDep,
+    delta: int = 0,
 ) -> HTMLResponse:
     item = collection.get_item(item_id)
     new_quantity = max(0, item.quantity + delta)
     collection.set_quantity(item_id, new_quantity)
     if new_quantity == 0:
         return HTMLResponse("")  # a linha some da tabela (hx-swap="outerHTML")
-    return _row_response(request, collection.get_item(item_id))
+    return _row_response(request, catalog, collection.get_item(item_id))
 
 
 @router.post("/{item_id}/set-print", response_class=HTMLResponse)
@@ -85,10 +111,11 @@ def set_print(
     item_id: int,
     request: Request,
     collection: CollectionServiceDep,
+    catalog: CatalogServiceDep,
     card_print_id: Annotated[int, Form()],
 ) -> HTMLResponse:
     collection.set_print(item_id, card_print_id)
-    return _row_response(request, collection.get_item(item_id))
+    return _row_response(request, catalog, collection.get_item(item_id))
 
 
 @router.get("/{item_id}/print-options", response_class=HTMLResponse)

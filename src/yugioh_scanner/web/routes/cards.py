@@ -3,7 +3,9 @@
 
 `/cards` é a Fase 2 do faseamento web pedido pelo usuário: uma aba separada
 da coleção, mostrando o catálogo inteiro sincronizado do YGOPRODeck (~14 mil
-cartas), não só o que a pessoa já possui.
+cartas), não só o que a pessoa já possui. A Fase 3 adiciona idioma: a busca
+já casa nome traduzido (FR/DE/IT/PT) em qualquer tela, e tanto a listagem
+quanto o detalhe deixam escolher em qual idioma exibir nome e descrição.
 """
 
 from __future__ import annotations
@@ -14,6 +16,7 @@ from typing import Any
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse
 
+from ...services.catalog_service import DISPLAY_LANGUAGES, resolve_display_language
 from ..deps import CatalogServiceDep, CollectionServiceDep
 
 router = APIRouter()
@@ -38,6 +41,7 @@ def _database_filters(request: Request) -> dict[str, Any]:
         "set_prefix": q.get("set") or None,
         "view": view,
         "page": page,
+        "lang": resolve_display_language(q.get("lang")),
     }
 
 
@@ -55,11 +59,14 @@ def _load_database_page(request: Request, catalog: CatalogServiceDep) -> dict[st
         limit=page_size,
         offset=(page - 1) * page_size,
     )
+    display_names = catalog.display_names(cards, filters["lang"])
     return {
         "cards": cards,
+        "display_names": display_names,
         "filters": {**filters, "page": page},
         "total": total,
         "total_pages": total_pages,
+        "languages": DISPLAY_LANGUAGES,
     }
 
 
@@ -88,6 +95,11 @@ def card_detail(
     owned_print_ids = {item.card_print_id for item in owned if item.card_print_id is not None}
     total_owned = sum(item.quantity for item in owned)
 
+    alt_names = catalog.alt_names_for_card(card_id)
+    lang = resolve_display_language(request.query_params.get("lang"))
+    localized = catalog.localize(card, alt_names, lang)
+    available_languages = {"EN", *(alt.language for alt in alt_names)}
+
     templates = request.app.state.templates
     return templates.TemplateResponse(
         request,
@@ -98,5 +110,9 @@ def card_detail(
             "owned": owned,
             "owned_print_ids": owned_print_ids,
             "total_owned": total_owned,
+            "localized": localized,
+            "lang": lang,
+            "languages": DISPLAY_LANGUAGES,
+            "available_languages": available_languages,
         },
     )

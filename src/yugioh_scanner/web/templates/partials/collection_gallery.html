@@ -1,11 +1,12 @@
 <div class="gallery-grid">
   {% for item in items %}
-  <a class="gallery-item" href="/cards/{{ item.card_id }}" title="{{ item.card.name }}">
+  {% set display_name = display_names.get(item.card_id, item.card.name) if display_names else item.card.name %}
+  <a class="gallery-item" href="/cards/{{ item.card_id }}?lang={{ filters.lang if filters else 'EN' }}" title="{{ display_name }}">
     <div class="gallery-thumb">
-      <img src="/api/v1/cards/{{ item.card_id }}/image?size=small" loading="lazy" alt="{{ item.card.name }}">
+      <img src="/api/v1/cards/{{ item.card_id }}/image?size=small" loading="lazy" alt="{{ display_name }}">
       <span class="gallery-qty">x{{ item.quantity }}</span>
     </div>
-    <span class="gallery-caption">{{ item.card.name }}</span>
+    <span class="gallery-caption">{{ display_name }}</span>
   </a>
   {% else %}
   <p><em>Nenhum item bate com o filtro.</em></p>
