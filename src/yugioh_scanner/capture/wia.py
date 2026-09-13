@@ -62,18 +62,35 @@ def build() -> WiaScannerBackend:
 
 class WiaScannerBackend:
     def _device_manager(self) -> Any:
+        import pythoncom
         import win32com.client
 
+        # COM precisa ser inicializado **por thread**, não por processo. A
+        # Web roda cada rota síncrona (`list_devices`/`capture`) numa thread
+        # de um pool (FastAPI/anyio) que é reciclado com o tempo — a thread
+        # que atendeu a primeira chamada pode não ser a mesma que atende a
+        # próxima. Sem isto, `Dispatch()` falha nessa segunda thread com um
+        # erro de COM cru (achado real: a seção de captura em `/scan`
+        # funcionava ao carregar a página, e sumia silenciosamente depois de
+        # navegar para `/review` e voltar — tempo suficiente para o pool
+        # trocar de thread). `CoInitialize()` é seguro de chamar de novo na
+        # mesma thread (devolve `S_FALSE`, não levanta).
+        pythoncom.CoInitialize()
         return win32com.client.Dispatch("WIA.DeviceManager")
 
     def list_devices(self) -> list[ScannerDeviceInfo]:
-        manager = self._device_manager()
-        devices = []
-        for info in manager.DeviceInfos:
-            devices.append(
+        try:
+            manager = self._device_manager()
+            return [
                 ScannerDeviceInfo(id=info.DeviceID, name=info.Properties("Name").Value)
-            )
-        return devices
+                for info in manager.DeviceInfos
+            ]
+        except Exception as exc:  # COM levanta pywintypes.com_error genérico
+            # Sem isto, um erro de COM cru sobe até a rota Web como 500 sem
+            # `user_message`/`hint` — o JS de `/scan` trata qualquer falha
+            # aqui como "sem scanner" e some com a seção em silêncio, o que
+            # esconde o problema de verdade em vez de dar um erro acionável.
+            raise ScanCaptureFailedError(str(exc)) from exc
 
     def capture(
         self,

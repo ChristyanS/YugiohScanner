@@ -99,6 +99,12 @@ def _install_fake_win32com(monkeypatch: pytest.MonkeyPatch, manager: _FakeDevice
     win32com_module.client = client_module  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "win32com", win32com_module)
     monkeypatch.setitem(sys.modules, "win32com.client", client_module)
+    # `pythoncom.CoInitialize()` é chamado antes de todo `Dispatch()` (init
+    # de COM por thread, plano §22/ADR 0011) — fakeado junto, senão o teste
+    # exigiria `pywin32` de verdade instalado só para essa chamada.
+    pythoncom_module = types.ModuleType("pythoncom")
+    pythoncom_module.CoInitialize = lambda: None  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "pythoncom", pythoncom_module)
 
 
 class TestBuild:
@@ -136,6 +142,30 @@ class TestListDevices:
     def test_no_devices_returns_empty_list(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _install_fake_win32com(monkeypatch, _FakeDeviceManager([]))
         assert wia.WiaScannerBackend().list_devices() == []
+
+    def test_com_error_becomes_a_domain_error_not_a_raw_exception(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Regressão: um erro de COM cru (ex.: thread do pool da Web sem
+        `CoInitialize`, achado real) não pode vazar como exceção genérica —
+        vira `ScanCaptureFailedError` com mensagem, não um 500 opaco que o
+        JS de `/scan` trata como "sem scanner" e esconde em silêncio."""
+
+        def broken_dispatch(_prog_id: str) -> None:
+            raise RuntimeError("CoInitialize not called on this thread")
+
+        win32com_module = types.ModuleType("win32com")
+        client_module = types.ModuleType("win32com.client")
+        client_module.Dispatch = broken_dispatch  # type: ignore[attr-defined]
+        win32com_module.client = client_module  # type: ignore[attr-defined]
+        monkeypatch.setitem(sys.modules, "win32com", win32com_module)
+        monkeypatch.setitem(sys.modules, "win32com.client", client_module)
+        pythoncom_module = types.ModuleType("pythoncom")
+        pythoncom_module.CoInitialize = lambda: None  # type: ignore[attr-defined]
+        monkeypatch.setitem(sys.modules, "pythoncom", pythoncom_module)
+
+        with pytest.raises(ScanCaptureFailedError):
+            wia.WiaScannerBackend().list_devices()
 
 
 class TestCapture:

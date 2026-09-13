@@ -99,6 +99,7 @@ module = [
     "cv2.*",
     "win32com.*",
     "pywintypes.*",
+    "pythoncom.*",
 ]
 ignore_missing_imports = true
 
