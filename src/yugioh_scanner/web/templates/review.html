@@ -30,8 +30,10 @@
 
     <div id="print-section" hidden>
       <label>Set
+        <input type="search" id="print-search" placeholder="Buscar set (código, nome, raridade, região)...">
         <select id="print-select"></select>
       </label>
+      <small id="print-count"></small>
       <small id="print-auto-hint" hidden>Set detectado automaticamente pelo código lido.</small>
     </div>
 
@@ -76,7 +78,9 @@ const ocrName = document.getElementById("ocr-name");
 const ocrCode = document.getElementById("ocr-code");
 const candidatesEl = document.getElementById("candidates");
 const printSection = document.getElementById("print-section");
+const printSearch = document.getElementById("print-search");
 const printSelect = document.getElementById("print-select");
+const printCount = document.getElementById("print-count");
 const printAutoHint = document.getElementById("print-auto-hint");
 const languageSelect = document.getElementById("language-select");
 const languageHint = document.getElementById("language-hint");
@@ -162,6 +166,8 @@ function render() {
   currentPrints = [];
   printSection.hidden = true;
   printSelect.innerHTML = "";
+  printSearch.value = "";
+  printCount.textContent = "";
   manualSearchDetails.open = false;
   manualSearchInput.value = "";
   manualSearchResults.innerHTML = "";
@@ -210,6 +216,40 @@ async function selectManualCard(card, li) {
   await selectCard(card.id, { card_id: card.id, name: card.name, score: null }, autoPrintId);
 }
 
+//: Sem busca, mostra só os primeiros N — com o enriquecimento `yaml-yugi`
+//: (ADR 0012) uma carta popular passa de 300 prints, e listar tudo de cara
+//: é exatamente o problema que a busca resolve (achado real do usuário).
+const PRINT_OPTIONS_CAP = 50;
+
+function renderPrintOptions(filterText) {
+  const q = (filterText || "").trim().toLowerCase();
+  const matches = !q
+    ? currentPrints
+    : currentPrints.filter((p) => {
+        const haystack = `${p.set_code} ${p.rarity || ""} ${p.region || ""}`.toLowerCase();
+        return haystack.includes(q);
+      });
+  const truncated = !q && matches.length > PRINT_OPTIONS_CAP;
+  const shown = truncated ? matches.slice(0, PRINT_OPTIONS_CAP) : matches;
+
+  const previous = selectedPrint;
+  printSelect.innerHTML = '<option value="">(set indefinido)</option>' +
+    shown.map(p => `<option value="${p.id}">${p.set_code} — ${p.rarity || "?"}${p.region ? " [" + p.region + "]" : ""}</option>`).join("");
+  // Preserva a seleção atual se ela ainda estiver na lista filtrada.
+  if (previous && shown.some((p) => String(p.id) === previous)) {
+    printSelect.value = previous;
+  }
+  printCount.textContent = truncated
+    ? `Mostrando ${shown.length} de ${matches.length} — digite para refinar.`
+    : `${matches.length} set(s) encontrado(s).`;
+}
+
+let printSearchTimer = null;
+printSearch.addEventListener("input", () => {
+  clearTimeout(printSearchTimer);
+  printSearchTimer = setTimeout(() => renderPrintOptions(printSearch.value), 200);
+});
+
 async function selectCard(cardId, candidate, autoPrintId) {
   selectedCandidate = candidate;
   // Feedback visível: sem isto, escolher um resultado da busca manual não
@@ -221,8 +261,8 @@ async function selectCard(cardId, candidate, autoPrintId) {
   const res = await fetch(`/api/v1/cards/${cardId}`);
   const card = await res.json();
   currentPrints = card.prints;
-  printSelect.innerHTML = '<option value="">(set indefinido)</option>' +
-    card.prints.map(p => `<option value="${p.id}">${p.set_code} — ${p.rarity || "?"}${p.region ? " [" + p.region + "]" : ""}</option>`).join("");
+  printSearch.value = "";
+  renderPrintOptions("");
   printSection.hidden = false;
   const auto = autoPrintId ? String(autoPrintId) : "";
   printSelect.value = auto;
@@ -233,7 +273,7 @@ async function selectCard(cardId, candidate, autoPrintId) {
     printAutoHint.hidden = true;
   };
   // Se a carta física já foi detectada num idioma que tem print distinto no
-  // catálogo (hoje só PT/OTS — ver `matching/print_language.py`), troca a
+  // catálogo (ADR 0009/0012 — ver `matching/print_language.py`), troca a
   // seleção automática do código pela seleção do idioma certo.
   applyLanguageFilter();
 }
@@ -244,6 +284,10 @@ function applyLanguageFilter() {
   if (lang === "EN" || !currentPrints.length) return;
   const match = currentPrints.find((p) => p.region === lang);
   if (match) {
+    // Filtra pelo próprio código do print detectado: garante que ele exista
+    // na lista renderizada mesmo se estiver fora do teto de exibição padrão.
+    printSearch.value = match.set_code;
+    renderPrintOptions(match.set_code);
     printSelect.value = String(match.id);
     selectedPrint = String(match.id);
     printAutoHint.hidden = true;
@@ -328,7 +372,7 @@ document.getElementById("btn-reject").addEventListener("click", rejectCurrent);
 
 document.addEventListener("keydown", (e) => {
   if (body.hidden) return;
-  if (e.target === manualSearchInput) return; // digitar/Enter na busca não deve disparar atalhos
+  if (e.target === manualSearchInput || e.target === printSearch) return; // digitar/Enter na busca não deve disparar atalhos
   if (e.target.tagName === "SELECT" || e.target.tagName === "INPUT") {
     if (e.key !== "Enter") return;
   }

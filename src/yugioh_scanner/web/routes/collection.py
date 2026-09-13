@@ -118,15 +118,30 @@ def set_print(
     return _row_response(request, catalog, collection.get_item(item_id))
 
 
+#: Sem busca, mostra só os primeiros N prints — com o enriquecimento
+#: `yaml-yugi` (ADR 0012) uma carta popular passa de 300 prints, e listar
+#: tudo de cara é o problema que a busca resolve (achado real do usuário).
+_PRINT_OPTIONS_DEFAULT_LIMIT = 30
+
+
 @router.get("/{item_id}/print-options", response_class=HTMLResponse)
 def print_options(
-    item_id: int, request: Request, collection: CollectionServiceDep, catalog: CatalogServiceDep
+    item_id: int,
+    request: Request,
+    collection: CollectionServiceDep,
+    catalog: CatalogServiceDep,
+    q: str | None = None,
 ) -> HTMLResponse:
     item = collection.get_item(item_id)
-    prints = catalog.prints_for_card(item.card_id)
+    all_prints = catalog.prints_for_card(item.card_id, query=q)
+    total = len(all_prints)
+    truncated = q is None and total > _PRINT_OPTIONS_DEFAULT_LIMIT
+    prints = all_prints[:_PRINT_OPTIONS_DEFAULT_LIMIT] if truncated else all_prints
     templates = request.app.state.templates
     return templates.TemplateResponse(
-        request, "partials/print_options.html", {"item": item, "prints": prints}
+        request,
+        "partials/print_options.html",
+        {"item": item, "prints": prints, "total": total, "truncated": truncated, "query": q or ""},
     )
 
 

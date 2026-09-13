@@ -21,7 +21,11 @@ from fastapi.testclient import TestClient
 from tests.factories import make_card_image, make_grid_photo
 from yugioh_scanner.config import Settings
 from yugioh_scanner.db.session import Database
-from yugioh_scanner.errors import NoScannerDeviceFoundError
+from yugioh_scanner.errors import (
+    NoScannerDeviceFoundError,
+    ScannerUnavailableError,
+    ScannerUnsupportedPlatformError,
+)
 from yugioh_scanner.ocr.fake_provider import FakeOCRProvider
 from yugioh_scanner.ocr.registry import register_provider, unregister_provider
 from yugioh_scanner.scanner.worker import reset_provider
@@ -113,6 +117,16 @@ class TestHealthAndStats:
 class TestCards:
     def test_search_finds_by_partial_name(self, client: TestClient) -> None:
         results = client.get("/api/v1/cards", params={"q": "blue eyes"}).json()
+        assert any(c["id"] == BLUE_EYES for c in results)
+
+    def test_search_finds_by_accented_translated_name(self, client: TestClient) -> None:
+        """Bug real reportado pelo usuário: buscar pelo nome em português
+        (com acento) não encontrava a carta — `sanitize_fts_query` quebrava
+        "Dragão" em fragmentos ("drag" + "o") em vez de um token limpo. A
+        fixture `cards_page1_pt` já traz essa tradução exata para o Blue-Eyes."""
+        results = client.get(
+            "/api/v1/cards", params={"q": "Dragão Branco de Olhos Azuis"}
+        ).json()
         assert any(c["id"] == BLUE_EYES for c in results)
 
     def test_search_without_query_lists_alphabetically(self, client: TestClient) -> None:
@@ -679,3 +693,32 @@ class TestCaptureApi:
 
         assert response.status_code == 422
         assert "hint" in response.json()
+
+    def test_unsupported_platform_maps_to_501_not_422(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Distinção real necessária: "este ambiente não suporta WIA" (fica
+        em silêncio no `scan.html`) é diferente de "o backend quebrou em
+        runtime" (`test_capture_error_maps_to_422`, precisa aparecer). Achado
+        real: antes da distinção, o JS tratava as duas a mesma coisa e
+        escondia a seção de captura mesmo quando havia scanner de verdade."""
+        monkeypatch.setattr(
+            "yugioh_scanner.web.routes.api.create_backend",
+            lambda _name: (_ for _ in ()).throw(ScannerUnsupportedPlatformError()),
+        )
+
+        response = client.get("/api/v1/capture/devices")
+
+        assert response.status_code == 501
+
+    def test_missing_pywin32_maps_to_501_not_422(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(
+            "yugioh_scanner.web.routes.api.create_backend",
+            lambda _name: (_ for _ in ()).throw(ScannerUnavailableError()),
+        )
+
+        response = client.get("/api/v1/capture/devices")
+
+        assert response.status_code == 501

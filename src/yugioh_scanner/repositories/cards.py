@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from ..db.fts import search_alt_card_ids, search_card_ids
@@ -29,10 +29,28 @@ class CardRepository:
     def get(self, card_id: int) -> Card | None:
         return self.session.get(Card, card_id)
 
-    def prints_for(self, card_id: int) -> list[CardPrint]:
-        stmt = (
-            select(CardPrint).where(CardPrint.card_id == card_id).order_by(CardPrint.set_code_full)
-        )
+    def prints_for(self, card_id: int, *, query: str | None = None) -> list[CardPrint]:
+        """Prints de uma carta, opcionalmente filtrados por texto livre.
+
+        O enriquecimento `yaml-yugi` (ADR 0012) fez a contagem de prints por
+        carta explodir (uma carta popular passa facilmente de 300 linhas
+        entre EN/DE/FR/IT/PT/JA/KO) — um `<select>` sem filtro virou
+        inutilizável (achado real do usuário). `query` casa contra código do
+        set, nome do set, raridade e região — o `LIKE` do SQLite já é
+        case-insensitive para ASCII, sem precisar de `lower()` dos dois lados.
+        """
+        stmt = select(CardPrint).where(CardPrint.card_id == card_id)
+        if query and query.strip():
+            pattern = f"%{query.strip()}%"
+            stmt = stmt.where(
+                or_(
+                    CardPrint.set_code_full.ilike(pattern),
+                    CardPrint.set_name.ilike(pattern),
+                    CardPrint.rarity.ilike(pattern),
+                    CardPrint.region.ilike(pattern),
+                )
+            )
+        stmt = stmt.order_by(CardPrint.set_code_full)
         return list(self.session.scalars(stmt))
 
     def alt_names_for(self, card_id: int) -> list[CardAltName]:

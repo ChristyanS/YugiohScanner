@@ -122,20 +122,36 @@ dropZone.addEventListener("drop", (e) => {
 });
 fileInput.addEventListener("change", () => uploadFiles(fileInput.files));
 
-// Seção de captura só aparece se houver mesmo um backend de scanner
-// disponível (Windows + pywin32 + ao menos um dispositivo) — em qualquer
-// outro ambiente, a ausência é silenciosa: não é uma falha do usuário.
+// Seção de captura só some em silêncio quando o ambiente genuinamente não
+// suporta WIA (não é Windows, ou falta `pywin32` — status 501, ver
+// `web/app.py::_error_status`): aí a ausência não é uma falha do usuário.
+// Qualquer OUTRA falha (COM quebrou, nenhum dispositivo encontrado agora)
+// é um erro de verdade e precisa aparecer — escondê-la também foi o motivo
+// da seção "sumir da tela" mesmo em máquinas com scanner de verdade
+// (achado real: o backend passou a levantar erro com mensagem, mas o JS
+// continuava tratando qualquer falha como "sem scanner" e escondendo tudo).
 async function loadCaptureDevices() {
   try {
     const res = await fetch("/api/v1/capture/devices");
-    if (!res.ok) return;
+    if (res.status === 501) return; // ambiente sem suporte a WIA — silêncio de propósito
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      captureSection.hidden = false;
+      deviceSelect.innerHTML = "";
+      captureButton.disabled = true;
+      captureStatus.textContent = `Captura por scanner indisponível: ${body.error || "erro desconhecido"}` +
+        (body.hint ? ` — ${body.hint}` : "");
+      return;
+    }
     const devices = await res.json();
     if (!devices.length) return;
     deviceSelect.innerHTML = devices.map((d) => `<option value="${d.id}">${d.name}</option>`).join("");
     captureSection.hidden = false;
+    captureButton.disabled = false;
+    captureStatus.textContent = "";
   } catch (err) {
-    // Sem rede/servidor indisponível para este endpoint específico — a
-    // seção fica oculta, igual a "sem scanner".
+    // Falha de rede real (servidor fora do ar) — sem nada acionável para
+    // mostrar aqui; mantém o comportamento silencioso original.
   }
 }
 loadCaptureDevices();

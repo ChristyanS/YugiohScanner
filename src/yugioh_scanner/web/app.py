@@ -25,6 +25,8 @@ from ..errors import (
     CaptureError,
     InvalidScanPathError,
     PrintNotFoundForCardError,
+    ScannerUnavailableError,
+    ScannerUnsupportedPlatformError,
     ScanResultAlreadyAppliedError,
     UnknownExportProfileError,
     UploadError,
@@ -62,6 +64,17 @@ def _error_status(exc: YugiohScannerError) -> int:
         exc, AmbiguousCardError | PrintNotFoundForCardError | ScanResultAlreadyAppliedError
     ):
         return 409
+    if isinstance(exc, ScannerUnsupportedPlatformError | ScannerUnavailableError):
+        # Checado **antes** do `CaptureError` genérico (ambas são subclasses
+        # dele): "este ambiente não tem/suporta WIA" é estruturalmente
+        # diferente de "o backend de captura existe e quebrou em runtime"
+        # (`ScanCaptureFailedError`, `NoScannerDeviceFoundError`, ...). 501
+        # deixa o cliente (`scan.html`) distinguir "escondo em silêncio,
+        # ambiente não suporta" de "mostro o erro, algo quebrou de verdade"
+        # sem precisar inspecionar o texto da mensagem (achado real: a seção
+        # de captura "sumia da tela" em qualquer falha, inclusive quando o
+        # scanner existe e só a listagem de dispositivos deu erro).
+        return 501
     if isinstance(
         exc,
         InvalidScanPathError

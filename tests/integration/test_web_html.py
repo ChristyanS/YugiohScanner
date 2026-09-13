@@ -98,6 +98,20 @@ class TestCollectionInlineActions:
         assert row.status_code == 200
         assert "SDK-001" in row.text
 
+    def test_print_options_search_filters_the_list(self, client: TestClient) -> None:
+        """Achado real de uso (ADR 0012): sem busca, o `<select>` de sets
+        virou grande demais depois do enriquecimento yaml-yugi."""
+        item = client.post("/api/v1/collection", json={"name": "Dark Magician"}).json()
+
+        matching = client.get(f"/collection/{item['id']}/print-options", params={"q": "SDK"})
+        assert matching.status_code == 200
+        assert "SDK-001" in matching.text
+
+        no_match = client.get(f"/collection/{item['id']}/print-options", params={"q": "ZZZZNOPE"})
+        assert no_match.status_code == 200
+        assert "SDK-001" not in no_match.text
+        assert "<select" in no_match.text  # continua um dropdown válido, só vazio
+
     def test_delete_removes_the_row(self, client: TestClient) -> None:
         item = client.post("/api/v1/collection", json={"name": "Dark Magician"}).json()
         response = client.delete(f"/collection/{item['id']}")

@@ -85,6 +85,23 @@ class TestOcrArtifacts:
         )
 
     def test_accented_text(self) -> None:
-        # Acentos não são [a-z0-9]; a normalização de nome (Fase 4) os remove
-        # antes. Aqui só garantimos que nada quebra.
-        assert sanitize_fts_query("Dragão") == "drag OR o"
+        """Bug real de busca (achado do usuário, ver docs/adr e histórico):
+        esta função recebe texto de busca **direto do usuário**, não só nome
+        já normalizado — o comentário antigo deste teste presumia o
+        contrário e documentava o bug como se fosse o comportamento certo.
+        Sem passar por `normalize_strict` primeiro, "Dragão" quebrava em
+        dois fragmentos curtos e ruidosos ("drag" + "o") em vez do token
+        único "dragao*", que é o que bate com o conteúdo de fato indexado
+        (`name_normalized` já remove acentos na ingestão)."""
+        assert sanitize_fts_query("Dragão") == "dragao*"
+
+    def test_multiword_accented_phrase_produces_clean_tokens(self) -> None:
+        """Caso real reportado: buscar o nome em português de Blue-Eyes White
+        Dragon precisa gerar tokens limpos o bastante para o motor de busca
+        achar a carta — fragmentos como "drag"/"o"/"for"/"a" geravam ruído
+        que ou enterrava o resultado certo ou saturava sozinho o teto de
+        candidatos antes mesmo de consultar os nomes traduzidos."""
+        assert sanitize_fts_query("Dragão Branco de Olhos Azuis") == (
+            "dragao OR branco OR de OR olhos OR azuis*"
+        )
+        assert sanitize_fts_query("Força Celeste") == "forca OR celeste*"

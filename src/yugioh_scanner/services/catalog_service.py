@@ -76,8 +76,8 @@ class CatalogService:
     def count_cards(self, query: str | None = None, *, set_prefix: str | None = None) -> int:
         return self.cards.count(query, set_prefix=set_prefix)
 
-    def prints_for_card(self, card_id: int) -> list[CardPrint]:
-        return self.cards.prints_for(card_id)
+    def prints_for_card(self, card_id: int, *, query: str | None = None) -> list[CardPrint]:
+        return self.cards.prints_for(card_id, query=query)
 
     def list_sets(self, *, limit: int = 1000, offset: int = 0) -> list[CardSet]:
         return self.sets.list_all(limit=limit, offset=offset)

@@ -16,6 +16,8 @@ import re
 from sqlalchemy import Engine, text
 from sqlalchemy.orm import Session
 
+from ..domain.normalization import normalize_strict
+
 #: A DDL (tabela virtual + triggers) mora na migração `0001_initial_schema`,
 #: não aqui: migração é história congelada e não pode mudar quando este módulo
 #: mudar. Este arquivo tem apenas o que roda em tempo de execução.
@@ -38,6 +40,17 @@ def sanitize_fts_query(raw: str, *, prefix_last: bool = True, operator: str = "O
     devolviam zero candidatos. Com ``OR`` todas devolvem 50, ordenados por bm25,
     e o rerank por similaridade escolhe entre eles.
 
+    Passa por `normalize_strict` **antes** de tokenizar — mesma normalização
+    que gera o conteúdo indexado (`card.name_normalized`/`card_alt_name.
+    name_normalized`). Sem isso, um acento vira delimitador de token em vez de
+    ser removido: "dragão" quebrava em "drag" + "o" (bug real de busca —
+    achado real do usuário: pesquisar "Dragão Branco de Olhos Azuis" não
+    encontrava Blue-Eyes, e "Força Celeste" não encontrava nenhuma carta Sky
+    Striker). Os fragmentos curtos resultantes ("for", "a", "o", "drag") não
+    só eram ruído — eram numerosos o bastante para saturar sozinhos o teto de
+    candidatos do nome em inglês, fazendo `CardRepository._matching_ids`
+    nunca chegar a consultar os nomes traduzidos.
+
     Devolve string vazia quando não sobra nenhum token — o chamador deve tratar
     isso como "sem candidatos" em vez de executar um MATCH vazio.
 
@@ -47,8 +60,12 @@ def sanitize_fts_query(raw: str, *, prefix_last: bool = True, operator: str = "O
     'dark AND magician*'
     >>> sanitize_fts_query('" OR name MATCH "x')
     'or OR name OR match OR x'
+    >>> sanitize_fts_query('Dragão Branco de Olhos Azuis')
+    'dragao OR branco OR de OR olhos OR azuis*'
+    >>> sanitize_fts_query('Força Celeste')
+    'forca OR celeste*'
     """
-    tokens = _TOKEN_RE.findall(raw.lower())
+    tokens = _TOKEN_RE.findall(normalize_strict(raw))
     if not tokens:
         return ""
     if prefix_last and len(tokens[-1]) >= 2:
