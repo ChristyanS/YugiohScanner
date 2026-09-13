@@ -147,7 +147,7 @@ Ver [`adr/`](adr/) para o histórico completo. Resumo:
 
 | ADR | Decisão |
 |---|---|
-| [0001](adr/0001-limiares-de-confianca.md) | Limiares de confiança: julgamento de engenharia, calibração real pendente de corpus de fotos |
+| [0001](adr/0001-limiares-de-confianca.md) | Limiares de confiança: calibrados contra 270 fotos reais; bug de matching (colisão CJK) achado e corrigido |
 | [0002](adr/0002-stack-tecnologica.md) | Stack: FastAPI + Jinja/HTMX + SQLAlchemy 2.0 + Typer + RapidOCR |
 | [0003](adr/0003-rapidocr-como-padrao.md) | RapidOCR como OCR padrão em vez de Tesseract |
 | [0004](adr/0004-claude-vision-fallback-opcional.md) | Claude Vision como fallback opcional, não OCR principal |

@@ -41,6 +41,22 @@ FTS_LIMIT = 50
 #: Quantos candidatos guardamos para a tela de revisão.
 TOP_N = 5
 
+#: `normalize_strict`/`normalize_fuzzy` mantêm só `[a-z0-9 '-]` — um nome
+#: alternativo só em coreano ou japonês (`CardAltName`) normaliza para quase
+#: nada (achado real: o nome KO de "H - Heated Heart" vira `"h-"`; o de
+#: "Arcana Force V" vira `"v-"`). Um texto de OCR embaralhado que sobre só uma
+#: letra solta (ex.: um "h" ou "v" perdido no meio de kanji ilegível) então
+#: bate 100% contra esse nome degenerado — carta errada, confiança máxima.
+#: Reproduzido e confirmado na calibração de 2026-09-13 (`docs/adr/0001`).
+#: Nomes cuja forma normalizada é mais curta que isto carregam sinal
+#: insuficiente para casar por texto e são ignorados nos tiers 0/3/4 — a
+#: carta ainda pode ser identificada pelo set code (`domain/setcode.py`).
+MIN_MATCHABLE_LENGTH = 4
+
+
+def _is_matchable(normalized: str) -> bool:
+    return len(normalized) >= MIN_MATCHABLE_LENGTH
+
 
 @dataclass(frozen=True, slots=True)
 class NameCandidate:
@@ -118,9 +134,12 @@ class NameIndex:
                 canonical = canonical_names.get(alt.card_id)
                 if canonical is None:  # pragma: no cover - FK garante consistência
                     continue
+                alt_fuzzy = normalize_fuzzy(alt.name_normalized)
+                if not _is_matchable(alt_fuzzy):
+                    continue
                 card_ids.append(alt.card_id)
                 names.append(canonical)
-                fuzzy_names.append(normalize_fuzzy(alt.name_normalized))
+                fuzzy_names.append(alt_fuzzy)
                 languages.append(alt.language)
 
             self._card_ids = card_ids
@@ -202,7 +221,13 @@ class CandidateFinder:
 
         strict = normalize_strict(raw_name)
         fuzzy = normalize_fuzzy(raw_name)
-        if not fuzzy:
+        if not _is_matchable(fuzzy):
+            # Uma leitura que sobra quase nada depois de normalizar (ex.: OCR
+            # embaralhou um nome só em kanji/hangul e deixou uma letra solta)
+            # não carrega sinal de texto nenhum — qualquer candidato "achado"
+            # aqui seria coincidência de RapidFuzz com uma string curta demais
+            # para significar algo, nunca uma leitura real. A carta ainda pode
+            # ser identificada pelo set code (`_from_code_only`, adiante).
             return []
 
         self.tier_attempts[0] += 1
@@ -234,6 +259,8 @@ class CandidateFinder:
 
     def _tier0_exact(self, strict_name: str) -> NameCandidate | None:
         """Igualdade exata: o caso mais comum e o mais barato."""
+        if not _is_matchable(strict_name):
+            return None
         row = self.session.execute(
             select(Card.id, Card.name).where(Card.name_normalized == strict_name).limit(1)
         ).first()
@@ -309,7 +336,10 @@ class CandidateFinder:
             variants = (("EN", row.name_normalized), *alt_names.get(row.id, ()))
             best_language, best_score = "EN", -1.0
             for language, variant in variants:
-                variant_score = fuzz.WRatio(fuzzy_query, normalize_fuzzy(variant))
+                variant_fuzzy = normalize_fuzzy(variant)
+                if not _is_matchable(variant_fuzzy):
+                    continue
+                variant_score = fuzz.WRatio(fuzzy_query, variant_fuzzy)
                 if variant_score > best_score:
                     best_score, best_language = variant_score, language
             if best_score >= self.fuzzy_cutoff:

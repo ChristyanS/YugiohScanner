@@ -8,7 +8,7 @@ calibração rodar).
 
 | ADR | Título |
 |---|---|
-| [0001](0001-limiares-de-confianca.md) | Limiares de confiança: julgamento de engenharia, calibração pendente |
+| [0001](0001-limiares-de-confianca.md) | Limiares de confiança: calibrados contra 270 fotos reais; bug de matching (colisão CJK) achado e corrigido |
 | [0002](0002-stack-tecnologica.md) | Stack: FastAPI + Jinja/HTMX + SQLAlchemy 2.0 + Typer + RapidOCR |
 | [0003](0003-rapidocr-como-padrao.md) | RapidOCR como motor de OCR padrão |
 | [0004](0004-claude-vision-fallback-opcional.md) | Claude Vision como fallback opcional (Fase 10, implementado) |

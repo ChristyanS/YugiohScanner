@@ -115,11 +115,18 @@ def run_pipeline(
             for case in cases:
                 image = images[case.file]
                 outcome = process_task(_as_scan_task(image))
-                match = engine.match(outcome.read_name, outcome.read_code or None)
+                # `--grid` nunca é usado aqui (calibração roda o caso comum: uma
+                # foto, uma carta), então `crops` tem exatamente um item — exceto
+                # quando o pré-processamento falhou antes de gerar qualquer
+                # recorte (arquivo corrompido), caso em que `crops` fica vazio
+                # (ADR 0011, `scanner/worker.py::process_task`).
+                crop = outcome.crops[0] if outcome.crops else None
+                read_name = crop.read_name if crop is not None else ""
+                read_code = crop.read_code if crop is not None else ""
+                ocr_status = crop.status if crop is not None else (outcome.preprocess_status or "error")
+                match = engine.match(read_name, read_code or None)
                 readings.append(
-                    Reading(
-                        case=case, match=match, ocr_ms=outcome.elapsed_ms, ocr_status=outcome.status
-                    )
+                    Reading(case=case, match=match, ocr_ms=outcome.elapsed_ms, ocr_status=ocr_status)
                 )
     finally:
         provider.close()
