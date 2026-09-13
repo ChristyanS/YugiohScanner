@@ -87,6 +87,28 @@ class ApiResponseError(ApiError):
     """A API respondeu algo que não conseguimos interpretar."""
 
 
+# --------------------------------------------------------- enriquecimento i18n
+
+
+class EnrichmentError(YugiohScannerError):
+    """Falha do enriquecimento opcional (`db enrich-i18n`, ADR 0012).
+
+    Categoria própria, não `ApiError`: uma falha aqui nunca deve impedir o
+    `sync` principal (YGOPRODeck) nem qualquer outro comando de funcionar —
+    a fonte é explicitamente best-effort (docs/proposta-fontes-dados-catalogo.md).
+    """
+
+
+class EnrichmentSourceUnavailableError(EnrichmentError):
+    """Não foi possível baixar ou interpretar o dataset de enriquecimento."""
+
+    def __init__(self, source: str, reason: str) -> None:
+        super().__init__(
+            f"Não foi possível obter o dataset de enriquecimento em {source}: {reason}",
+            hint="O catálogo principal (YGOPRODeck) continua íntegro; tente novamente mais tarde.",
+        )
+
+
 # ------------------------------------------------------------------ scanner
 
 

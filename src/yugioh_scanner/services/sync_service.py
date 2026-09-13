@@ -15,6 +15,8 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
+from ..catalog_sources.yaml_yugi.client import YamlYugiClient
+from ..catalog_sources.yaml_yugi.importer import EnrichmentStats, YamlYugiEnrichmentImporter
 from ..config import Settings
 from ..db.session import Database
 from ..db.tables import (
@@ -29,12 +31,18 @@ from ..db.tables import (
     CardSet,
     utcnow,
 )
+from ..errors import EnrichmentError
 from ..logging_setup import get_logger, log_context
 from ..repositories.sync_state import SyncStateRepository
 from ..ygoprodeck.client import DEFAULT_PAGE_SIZE, YgoProDeckClient
 from ..ygoprodeck.importer import CatalogImporter, ImportStats
 
 log = get_logger(__name__)
+
+#: Chave em `sync_state` com o ETag da última importação bem-sucedida do
+#: yaml-yugi — o equivalente ao `checkDBVer.php` da YGOPRODeck, só que via
+#: cabeçalho HTTP padrão (o dataset é um arquivo estático, não uma API).
+SYNC_KEY_YAML_YUGI_ETAG = "yaml_yugi_etag"
 
 #: Chamado a cada página importada: (cartas_processadas, total_estimado).
 ProgressCallback = Callable[[int, int], None]
@@ -72,6 +80,24 @@ class SyncReport:
             "total_cards": self.total_cards,
             "total_prints": self.total_prints,
             "total_sets": self.total_sets,
+            "elapsed_s": round(self.elapsed_s, 2),
+            **self.stats.as_dict(),
+        }
+
+
+@dataclass
+class EnrichmentReport:
+    """O que aconteceu num `enrich_i18n` (ADR 0012)."""
+
+    performed: bool
+    reason: str
+    stats: EnrichmentStats = field(default_factory=EnrichmentStats)
+    elapsed_s: float = 0.0
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "performed": self.performed,
+            "reason": self.reason,
             "elapsed_s": round(self.elapsed_s, 2),
             **self.stats.as_dict(),
         }
@@ -252,6 +278,80 @@ class SyncService:
             total_prints=totals["total_prints"],
             total_sets=totals["total_sets"],
         )
+
+    # --------------------------------------------------------- enriquecimento
+
+    def enrich_i18n(
+        self,
+        *,
+        force: bool = False,
+        client: YamlYugiClient | None = None,
+    ) -> EnrichmentReport:
+        """`db enrich-i18n` (ADR 0012, Opção B): preenche nomes e prints
+        regionais/OCG que a YGOPRODeck não tem, a partir do dataset agregado
+        `yaml-yugi`.
+
+        Roda em transação **própria**, separada de `sync()` de propósito: uma
+        falha aqui (rede, formato do dataset) nunca deve deixar o catálogo
+        primário inconsistente nem impedir `sync`/`scan`/`review` de
+        funcionar — é fonte opcional e best-effort
+        (docs/proposta-fontes-dados-catalogo.md §3.2).
+
+        Sem `force`, respeita o `ETag` da última importação (o mesmo papel de
+        `checkDBVer.php`, só que via cabeçalho HTTP padrão — o dataset é um
+        arquivo estático de ~94 MB, não vale a pena baixar de novo se nada
+        mudou).
+        """
+        started = utcnow()
+        owns_client = client is None
+        active_client = client or YamlYugiClient(self.settings)
+
+        try:
+            with self.database.session() as session:
+                state = SyncStateRepository(session)
+                previous_etag = None if force else state.get(SYNC_KEY_YAML_YUGI_ETAG)
+
+                try:
+                    result = active_client.fetch_cards(etag=previous_etag)
+                except EnrichmentError as exc:
+                    # `exc.user_message`, não `str(exc)`: o `hint` embutido em
+                    # `YugiohScannerError.__str__` traz uma seta unicode que
+                    # quebra o `print()` cru do structlog em console Windows
+                    # de codepage legado (cp1252) — achado real ao validar
+                    # contra o dataset ao vivo. `report.reason` (exibido via
+                    # Rich na CLI, que lida bem com unicode) continua usando
+                    # a mensagem completa com o hint.
+                    log.warning("enrich_i18n.source_unavailable", error=exc.user_message)
+                    return EnrichmentReport(performed=False, reason=str(exc))
+
+                if result.not_modified:
+                    log.info("enrich_i18n.skipped", reason="dataset sem mudanças (ETag)")
+                    return EnrichmentReport(
+                        performed=False, reason="dataset sem mudanças desde a última vez (ETag)"
+                    )
+
+                importer = YamlYugiEnrichmentImporter(session)
+                stats = importer.import_cards(result.cards)
+
+                if result.etag:
+                    state.set(SYNC_KEY_YAML_YUGI_ETAG, result.etag)
+
+                if stats.unparsed_set_codes:
+                    sample = sorted(set(stats.unparsed_set_codes))[:10]
+                    log.warning(
+                        "enrich_i18n.unparsed_set_codes",
+                        count=len(set(stats.unparsed_set_codes)),
+                        sample=sample,
+                    )
+
+                elapsed = (utcnow() - started).total_seconds()
+                log.info("enrich_i18n.done", elapsed_s=round(elapsed, 1), **stats.as_dict())
+                return EnrichmentReport(
+                    performed=True, reason="importado", stats=stats, elapsed_s=elapsed
+                )
+        finally:
+            if owns_client:
+                active_client.close()
 
     # ---------------------------------------------------------------- helpers
 

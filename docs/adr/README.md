@@ -19,6 +19,7 @@ calibração rodar).
 | [0009](0009-idioma-do-print-por-regiao-existente.md) | Idioma do print: procurar irmão existente, não converter código |
 | [0010](0010-cardset-como-produto-logico.md) | `CardSet` é o produto lógico; `CardPrint.region` é a impressão regional |
 | [0011](0011-grade-de-cartas-e-captura-wia.md) | Grade de cartas por foto (OpenCV opcional, implementado) e captura via scanner WIA (planejada) |
+| [0012](0012-enriquecimento-yaml-yugi-e-overrides-de-print.md) | Enriquecimento via `yaml-yugi` (nomes/prints regionais e OCG) + overrides de print aprendidos do uso |
 
 Ver [`../architecture.md`](../architecture.md) para a visão geral atual do
 sistema, e [`../PLAN.md`](../PLAN.md) para o plano técnico original completo.

@@ -26,6 +26,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..db.tables import CardPrint
+from ..repositories.print_override import PrintOverrideRepository
 
 
 class PrintLanguageResolver(Protocol):
@@ -77,3 +78,44 @@ class SiblingPrintLanguageResolver:
         # ainda é uma resposta melhor que nenhuma — a carta certa é a coisa
         # que mais importa.
         return candidates[0]
+
+
+class OverridePrintLanguageResolver:
+    """Consulta `card_print_override` (ADR 0012, Opção D) — a correspondência
+    que um humano já confirmou manualmente para essa carta+idioma.
+
+    Alimentada por `PrintOverrideRepository.set()`, chamada em
+    `ScanService.confirm_result` sempre que a revisão confirma um print
+    explícito para um idioma diferente de inglês. É exatamente a segunda
+    implementação de `PrintLanguageResolver` que o ADR 0009 previu ("o dia em
+    que existir uma base própria de traduções de print").
+    """
+
+    def resolve(
+        self, session: Session, card_id: int, current_print: CardPrint | None, language: str
+    ) -> CardPrint | None:
+        if not language or language == "EN":
+            return None
+        return PrintOverrideRepository(session).get_print(card_id, language)
+
+
+class CompositePrintLanguageResolver:
+    """Encadeia resolvedores na ordem dada — o primeiro que achar, resolve.
+
+    Ordem recomendada (ADR 0012): `OverridePrintLanguageResolver` antes de
+    `SiblingPrintLanguageResolver` — uma correção aprendida do próprio uso
+    sempre vence a heurística automática de "print irmão no catálogo
+    sincronizado".
+    """
+
+    def __init__(self, resolvers: list[PrintLanguageResolver]) -> None:
+        self._resolvers = resolvers
+
+    def resolve(
+        self, session: Session, card_id: int, current_print: CardPrint | None, language: str
+    ) -> CardPrint | None:
+        for resolver in self._resolvers:
+            found = resolver.resolve(session, card_id, current_print, language)
+            if found is not None:
+                return found
+        return None

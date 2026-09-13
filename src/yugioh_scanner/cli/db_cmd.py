@@ -34,6 +34,7 @@ from ..db.tables import (
     SYNC_KEY_LAST_FULL_SYNC,
 )
 from ..ygoprodeck.client import YgoProDeckClient
+from .context import sync_service
 from .errors import handle_errors
 from .render import (
     ARROW,
@@ -252,3 +253,64 @@ def vacuum_cmd() -> None:
     vacuum(engine_from_settings(settings))
     after = database_size_bytes(settings)
     success(f"VACUUM + ANALYZE concluídos: {human_bytes(before)} {ARROW} {human_bytes(after)}")
+
+
+@app.command("enrich-i18n")
+@handle_errors
+def enrich_i18n_cmd(
+    force: bool = typer.Option(
+        False, "--force", help="Baixa o dataset de novo mesmo se o ETag não mudou."
+    ),
+    as_json: bool = typer.Option(False, "--json", help="Saída em JSON."),
+) -> None:
+    """Preenche nomes e prints regionais/OCG que a YGOPRODeck não tem (ADR 0012).
+
+    Fonte opcional e separada do `sync` principal: baixa o dataset agregado
+    do `yaml-yugi` (~94 MB, cacheado por ETag) e só acrescenta o que a
+    YGOPRODeck não cobre — nunca sobrescreve um dado que já veio de lá. Uma
+    falha aqui nunca deixa o catálogo primário inconsistente
+    (docs/proposta-fontes-dados-catalogo.md).
+    """
+    with sync_service() as service:
+        report = service.enrich_i18n(force=force)
+
+    if as_json:
+        print_json(report.as_dict())
+        return
+
+    if not report.performed:
+        success(f"Nada a fazer: {report.reason}.")
+        return
+
+    success(f"Enriquecimento concluído em {report.elapsed_s:.1f}s.")
+    stats = report.stats
+    print_key_values(
+        "Cartas",
+        {
+            "casadas com o catálogo local": stats.cards_matched,
+            "sem correspondência": stats.cards_unmatched,
+        },
+    )
+    print_key_values(
+        "Nomes alternativos",
+        {
+            "novos": stats.alt_names_inserted,
+            "atualizados": stats.alt_names_updated,
+            "pulados (tradução não-oficial)": stats.alt_names_skipped_unofficial,
+        },
+    )
+    print_key_values(
+        "Prints/sets",
+        {
+            "sets novos": stats.sets_inserted,
+            "prints novos": stats.prints_inserted,
+            "prints atualizados": stats.prints_updated,
+            "pulados (já vêm da YGOPRODeck)": stats.prints_skipped_primary,
+        },
+    )
+    if stats.unparsed_set_codes:
+        unique = sorted(set(stats.unparsed_set_codes))
+        warn(
+            f"{len(unique)} código(s) de set fora dos formatos conhecidos: "
+            f"{', '.join(unique[:5])}" + (" …" if len(unique) > 5 else "")
+        )

@@ -147,6 +147,19 @@ class Settings(BaseSettings):
         ),
     )
 
+    # ------------------------------------------------------ enriquecimento i18n
+    #: Arquivo agregado do yaml-yugi (ADR 0012) — dump estático (~94 MB,
+    #: regenerado diariamente), não uma API paginada. Consumido só por
+    #: `db enrich-i18n`, nunca pelo `sync` principal (docs/proposta-fontes-
+    #: dados-catalogo.md: fonte opcional, isolada, nunca quebra o catálogo
+    #: primário).
+    yaml_yugi_cards_url: str = (
+        "https://raw.githubusercontent.com/DawnbrandBots/yaml-yugi/aggregate/cards.json"
+    )
+    http_download_timeout_s: float = Field(
+        default=120.0, gt=0, description="Timeout maior: o dump do yaml-yugi tem ~94 MB."
+    )
+
     # ------------------------------------------------------------------- rede
     ygoprodeck_base_url: str = "https://db.ygoprodeck.com/api/v7"
     ygoprodeck_image_host: str = "images.ygoprodeck.com"

@@ -582,6 +582,60 @@ class TestReview:
         )
         assert item.language == "DE"
 
+    def test_confirm_with_explicit_print_and_language_records_an_override(
+        self, catalog: Database, settings: Settings, cards_folder: Path
+    ) -> None:
+        """ADR 0012 (Opção D): confirmar manualmente carta+print+idioma ensina
+        o `OverridePrintLanguageResolver` para a próxima leitura dessa carta
+        nesse idioma — mesmo sem nenhuma fonte externa saber a resposta."""
+        from yugioh_scanner.repositories.print_override import PrintOverrideRepository
+
+        scan(catalog, settings, cards_folder, no_auto=True)
+        svc = service(catalog, settings)
+        target = svc.pending_results()[0]
+
+        with catalog.session() as session:
+            sdk_print = session.scalar(
+                select(CardPrint).where(CardPrint.set_code_full == "SDK-001")
+            )
+            assert sdk_print is not None
+            print_id = sdk_print.id
+
+        svc.confirm_result(
+            target.id, card_id=DARK_MAGICIAN, card_print_id=print_id, language="DE"
+        )
+
+        with catalog.session() as session:
+            found = PrintOverrideRepository(session).get_print(DARK_MAGICIAN, "DE")
+            assert found is not None
+            assert found.id == print_id
+
+    def test_confirm_in_english_does_not_record_an_override(
+        self, catalog: Database, settings: Settings, cards_folder: Path
+    ) -> None:
+        """Inglês é o print padrão — não há nada a "aprender" aqui."""
+        from yugioh_scanner.repositories.print_override import PrintOverrideRepository
+
+        scan(catalog, settings, cards_folder, no_auto=True)
+        svc = service(catalog, settings)
+        blue_eyes_result = next(
+            r for r in svc.pending_results() if r.ocr_name_raw == "Blue-Eyes White Dragon"
+        )
+
+        with catalog.session() as session:
+            ct13_print = session.scalar(
+                select(CardPrint).where(CardPrint.set_code_full == "CT13-EN008")
+            )
+            assert ct13_print is not None
+            print_id = ct13_print.id
+
+        svc.confirm_result(
+            blue_eyes_result.id, card_id=BLUE_EYES, card_print_id=print_id, language="EN"
+        )
+
+        with catalog.session() as session:
+            assert PrintOverrideRepository(session).get_print(BLUE_EYES, "EN") is None
+
 
 class TestJobIntrospection:
     def test_recent_jobs_lists_newest_first(

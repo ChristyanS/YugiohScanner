@@ -71,6 +71,15 @@ DEFAULT_CONDITION = "Near Mint"
 DEFAULT_EDITION = "Unlimited"
 DEFAULT_LANGUAGE = "EN"
 
+#: Proveniência de uma linha de `card_print`/`card_alt_name` (ADR 0012).
+#: Fechado de propósito — ao contrário de `ALT_NAME_LANGUAGES` (que reflete
+#: um vocabulário da API externa e pode surpreender), quem decide quais
+#: fontes existem é o nosso próprio código, então um CHECK fechado aqui não
+#: corre o risco de ficar desatualizado sozinho.
+DATA_SOURCE_YGOPRODECK = "ygoprodeck"
+DATA_SOURCE_YAML_YUGI = "yaml_yugi"
+DATA_SOURCES = (DATA_SOURCE_YGOPRODECK, DATA_SOURCE_YAML_YUGI)
+
 
 def _check_in(column: str, allowed: tuple[str, ...], name: str) -> CheckConstraint:
     values = ", ".join(f"'{v}'" for v in allowed)
@@ -206,6 +215,13 @@ class CardAltName(Base):
     #: `card_id`, é sinal de tradução mal vinculada na fonte. NULL em bancos
     #: sincronizados antes desta coluna existir.
     name_en: Mapped[str | None] = mapped_column(String(255))
+    #: De onde esta linha veio (ADR 0012) — `'ygoprodeck'` por padrão.
+    #: `'yaml_yugi'` marca enriquecimento (`db enrich-i18n`), nunca grava por
+    #: cima de uma linha `'ygoprodeck'` existente para a mesma
+    #: `(card_id, language)`.
+    data_source: Mapped[str] = mapped_column(
+        String(16), nullable=False, default=DATA_SOURCE_YGOPRODECK
+    )
 
     synced_at: Mapped[dt.datetime] = mapped_column(DateTime, nullable=False, default=utcnow)
 
@@ -214,6 +230,7 @@ class CardAltName(Base):
     __table_args__ = (
         Index("ux_card_alt_name", "card_id", "language", unique=True),
         Index("ix_card_alt_name_normalized", "name_normalized"),
+        _check_in("data_source", DATA_SOURCES, "ck_card_alt_name_data_source"),
         # Checagem de **formato**, não de enumeração fechada (docs/
         # proposta-i18n-cartas-e-sets.md §1.6): a API já aceitou na prática um
         # idioma (`ja`) que nem ela mesma documenta como válido, então
@@ -288,6 +305,13 @@ class CardPrint(Base):
 
     #: Snapshot informativo (§0.3.6) — nunca fonte de verdade para preço.
     set_price: Mapped[float | None] = mapped_column(Float)
+    #: De onde este print veio (ADR 0012) — `'ygoprodeck'` por padrão.
+    #: `'yaml_yugi'` marca prints regionais/OCG que só o enriquecimento
+    #: (`db enrich-i18n`) trouxe, porque a YGOPRODeck não os tem
+    #: (docs/proposta-fontes-dados-catalogo.md).
+    data_source: Mapped[str] = mapped_column(
+        String(16), nullable=False, default=DATA_SOURCE_YGOPRODECK
+    )
     synced_at: Mapped[dt.datetime] = mapped_column(DateTime, nullable=False, default=utcnow)
 
     card: Mapped[Card] = relationship(back_populates="prints")
@@ -304,10 +328,54 @@ class CardPrint(Base):
         Index("ix_print_code_normalized", "set_code_normalized"),
         Index("ix_print_card", "card_id"),
         Index("ix_print_prefix", "set_prefix"),
+        _check_in("data_source", DATA_SOURCES, "ck_card_print_data_source"),
     )
 
     def __repr__(self) -> str:
         return f"<CardPrint {self.set_code_full} ({self.rarity})>"
+
+
+class CardPrintOverride(Base):
+    """Correção de print-por-idioma aprendida do próprio uso (ADR 0012, Opção D).
+
+    Gravada por `ScanService.confirm_result` sempre que um humano confirma
+    manualmente qual print corresponde a uma carta física num idioma — o
+    caso em que nem a YGOPRODeck nem o enriquecimento `yaml-yugi` sabiam a
+    resposta. Consultada por `OverridePrintLanguageResolver` **antes** de
+    `SiblingPrintLanguageResolver`: uma correção do usuário sempre vence a
+    heurística automática.
+    """
+
+    __tablename__ = "card_print_override"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    card_id: Mapped[int] = mapped_column(ForeignKey("card.id", ondelete="CASCADE"), nullable=False)
+    language: Mapped[str] = mapped_column(String(8), nullable=False)
+    card_print_id: Mapped[int] = mapped_column(
+        ForeignKey("card_print.id", ondelete="CASCADE"), nullable=False
+    )
+
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime, nullable=False, default=utcnow)
+    updated_at: Mapped[dt.datetime] = mapped_column(
+        DateTime, nullable=False, default=utcnow, onupdate=utcnow
+    )
+
+    card: Mapped[Card] = relationship()
+    card_print: Mapped[CardPrint] = relationship()
+
+    __table_args__ = (
+        Index("ux_card_print_override", "card_id", "language", unique=True),
+        CheckConstraint(
+            "length(language) BETWEEN 2 AND 3 AND language = upper(language)",
+            name="ck_card_print_override_language_format",
+        ),
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"<CardPrintOverride card={self.card_id} {self.language} "
+            f"-> print={self.card_print_id}>"
+        )
 
 
 # -------------------------------------------------------------------- coleção

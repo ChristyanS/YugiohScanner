@@ -93,6 +93,7 @@ thread própria e traduz o callback de progresso em eventos SSE. Ver
 | `db/` | Schema, engine, sessão, PRAGMAs | Conter regra de negócio |
 | `repositories/` | Traduzir domínio ↔ SQL | Chamar serviços ou a rede |
 | `ygoprodeck/` | Falar com a API externa | Escrever no banco diretamente (delega ao importer → repos) |
+| `catalog_sources/` | Enriquecer o catálogo a partir de fontes de terceiros (`yaml_yugi/`) | Criar `Card` nova ou sobrescrever dado que já veio da YGOPRODeck (ADR 0012) |
 | `images/` | Cache em disco e pré-processamento | Saber o que é uma carta |
 | `ocr/` | Extrair texto de imagem | Saber o que é uma carta |
 | `matching/` | Texto → carta/print | Escrever no banco |
@@ -154,3 +155,4 @@ Ver [`adr/`](adr/) para o histórico completo. Resumo:
 | [0006](adr/0006-hexagonal-seletivo.md) | Hexagonal aplicado só em OCR e exportadores |
 | [0007](adr/0007-sem-autenticacao.md) | Sem autenticação nesta versão |
 | [0008](adr/0008-progresso-de-scan-via-run-id.md) | Progresso de scan via `run_id` opaco, não `job_id` |
+| [0012](adr/0012-enriquecimento-yaml-yugi-e-overrides-de-print.md) | Enriquecimento via `yaml-yugi` (Opção B) + overrides de print aprendidos do uso (Opção D) |

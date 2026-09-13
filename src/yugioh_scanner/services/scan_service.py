@@ -49,10 +49,16 @@ from ..images.preprocess import BoundingBox, ImageError, load_image, prepare_reg
 from ..logging_setup import get_logger, log_context
 from ..matching.candidates import NameIndex
 from ..matching.engine import MatchingEngine, MatchResult
-from ..matching.print_language import PrintLanguageResolver, SiblingPrintLanguageResolver
+from ..matching.print_language import (
+    CompositePrintLanguageResolver,
+    OverridePrintLanguageResolver,
+    PrintLanguageResolver,
+    SiblingPrintLanguageResolver,
+)
 from ..ocr.base import REGION_CODE, REGION_FULL, REGION_NAME, OCRProvider, OCRRequest
 from ..ocr.registry import create_provider
 from ..repositories.collection import CollectionKey, CollectionRepository
+from ..repositories.print_override import PrintOverrideRepository
 from ..repositories.scans import ScanRepository
 from ..scanner.discovery import DiscoveredImage, discover_images, resolve_scan_folder
 from ..scanner.executor import resolve_workers
@@ -179,11 +185,14 @@ class ScanService:
         # Recarregar os ~14,5k nomes por imagem custaria a busca inteira de
         # novo a cada foto (plano §20.2).
         self._name_index = NameIndex()
-        # Injetável de propósito (plano de idiomas): a regra de hoje só acha
-        # print irmão quando o catálogo já sincronizou um (caso PT/OP — ver
-        # `matching/print_language.py`); uma base própria de traduções entra
-        # aqui depois, sem tocar no resto do serviço.
-        self.language_resolver = language_resolver or SiblingPrintLanguageResolver()
+        # Injetável de propósito (plano de idiomas). Default = cadeia (ADR
+        # 0012): overrides aprendidos do próprio uso (Opção D) vencem antes
+        # de tentar achar print irmão no catálogo sincronizado (ADR 0009,
+        # Opção B). Uma correção manual do usuário sempre tem prioridade
+        # sobre a heurística automática.
+        self.language_resolver = language_resolver or CompositePrintLanguageResolver(
+            [OverridePrintLanguageResolver(), SiblingPrintLanguageResolver()]
+        )
         # Cascata de fallback (plano §6.3, Fase 10): criada sob demanda, uma
         # vez por serviço. `_fallback_checked` distingue "ainda não tentei"
         # de "tentei e não deu" — sem isso, cada imagem duvidosa repetiria a
@@ -338,14 +347,22 @@ class ScanService:
             if result.applied:
                 raise ScanResultAlreadyAppliedError(result_id)
 
+            resolved_language = language or result.detected_language or DEFAULT_LANGUAGE
             key = CollectionKey(
                 card_id=card_id,
                 card_print_id=card_print_id,
                 condition=DEFAULT_CONDITION,
                 edition=DEFAULT_EDITION,
-                language=language or result.detected_language or DEFAULT_LANGUAGE,
+                language=resolved_language,
             )
             item = collection_repo.add_copies(key, quantity, source="scan")
+
+            # ADR 0012 (Opção D): um humano acabou de dizer, com autoridade,
+            # "esta é a carta+print certos para este idioma". Gravar isso
+            # ensina o app pra próxima vez, mesmo quando nem a YGOPRODeck nem
+            # o enriquecimento `yaml-yugi` sabiam a resposta.
+            if card_print_id is not None and resolved_language and resolved_language != "EN":
+                PrintOverrideRepository(session).set(card_id, resolved_language, card_print_id)
             # "confirmed" não é uma saída da política de confiança (por isso
             # não está no enum `Decision`, que é a saída pura de
             # `domain/confidence.py`) — é um estado só de revisão humana,
