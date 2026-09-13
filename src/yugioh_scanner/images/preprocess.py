@@ -221,6 +221,72 @@ def enhance_for_ocr(image: Image.Image, *, upscale: int = 1) -> Image.Image:
     return result
 
 
+def prepare_regions(
+    image: Image.Image,
+    *,
+    source: Path,
+    region: BoundingBox | None = None,
+    auto_crop: bool = True,
+    max_dimension: int = MAX_DIMENSION,
+) -> PreparedImage:
+    """Pipeline completo a partir de uma imagem já carregada.
+
+    `region`, quando informado, recorta primeiro para aquele retângulo (uma
+    célula de uma grade de cartas, plano §22) antes de rodar exatamente o
+    mesmo refino de sempre (`detect_card_bounds` + ROIs) sobre o recorte. Não
+    fecha `image`: quem chama pode ser dono dela (ex.: uma foto com várias
+    células, preparada uma vez e recortada N vezes) — só os intermediários
+    criados aqui são fechados.
+    """
+    notes: dict[str, Any] = {"original_size": list(image.size)}
+    to_close: list[Image.Image] = []
+
+    working = image
+    if region is not None:
+        working = image.crop(region.to_pixels(*image.size))
+        to_close.append(working)
+        notes["grid_region"] = [region.left, region.top, region.right, region.bottom]
+
+    try:
+        if auto_crop:
+            bounds = detect_card_bounds(working)
+            if bounds is not None:
+                working = working.crop(bounds)
+                to_close.append(working)
+                notes["cropped_to"] = list(bounds)
+            else:
+                notes["cropped_to"] = None
+
+        working = downscale(working, max_dimension)
+        to_close.append(working)
+        notes["working_size"] = list(working.size)
+
+        width, height = working.size
+        name_crop = working.crop(NAME_ROI.to_pixels(width, height))
+        code_crop = working.crop(CODE_ROI.to_pixels(width, height))
+
+        regions = {
+            "name": enhance_for_ocr(name_crop),
+            # 2× porque o código é o texto menor da carta.
+            "code": enhance_for_ocr(code_crop, upscale=2),
+            # A imagem inteira fica disponível como rede de segurança: se as
+            # ROIs não renderem texto, o pipeline tenta nela.
+            "full": enhance_for_ocr(working),
+        }
+        name_crop.close()
+        code_crop.close()
+        return PreparedImage(
+            source=source, width=width, height=height, regions=regions, notes=notes
+        )
+    finally:
+        closed: set[int] = set()
+        for candidate in to_close:
+            if candidate is image or id(candidate) in closed:
+                continue
+            closed.add(id(candidate))
+            candidate.close()
+
+
 def prepare_image(
     path: Path,
     *,
@@ -230,34 +296,9 @@ def prepare_image(
 ) -> PreparedImage:
     """Pipeline completo: arquivo → regiões prontas para o OCR."""
     image = load_image(path, max_pixels=max_pixels)
-    notes: dict[str, Any] = {"original_size": list(image.size)}
-
     try:
-        if auto_crop:
-            bounds = detect_card_bounds(image)
-            if bounds is not None:
-                image = image.crop(bounds)
-                notes["cropped_to"] = list(bounds)
-            else:
-                notes["cropped_to"] = None
-
-        image = downscale(image, max_dimension)
-        notes["working_size"] = list(image.size)
-
-        width, height = image.size
-        name_crop = image.crop(NAME_ROI.to_pixels(width, height))
-        code_crop = image.crop(CODE_ROI.to_pixels(width, height))
-
-        regions = {
-            "name": enhance_for_ocr(name_crop),
-            # 2× porque o código é o texto menor da carta.
-            "code": enhance_for_ocr(code_crop, upscale=2),
-            # A imagem inteira fica disponível como rede de segurança: se as
-            # ROIs não renderem texto, o pipeline tenta nela.
-            "full": enhance_for_ocr(image),
-        }
-        name_crop.close()
-        code_crop.close()
-        return PreparedImage(source=path, width=width, height=height, regions=regions, notes=notes)
+        return prepare_regions(
+            image, source=path, region=None, auto_crop=auto_crop, max_dimension=max_dimension
+        )
     finally:
         image.close()

@@ -20,6 +20,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 from sqlalchemy.orm import Session
 
@@ -41,17 +42,22 @@ from ..errors import (
     ScanImageNotFoundError,
     ScanResultAlreadyAppliedError,
     ScanResultNotFoundError,
+    YugiohScannerError,
 )
+from ..images.grid import ensure_cv_available
+from ..images.preprocess import BoundingBox, ImageError, load_image, prepare_regions
 from ..logging_setup import get_logger, log_context
 from ..matching.candidates import NameIndex
 from ..matching.engine import MatchingEngine, MatchResult
 from ..matching.print_language import PrintLanguageResolver, SiblingPrintLanguageResolver
+from ..ocr.base import REGION_CODE, REGION_FULL, REGION_NAME, OCRProvider, OCRRequest
+from ..ocr.registry import create_provider
 from ..repositories.collection import CollectionKey, CollectionRepository
 from ..repositories.scans import ScanRepository
 from ..scanner.discovery import DiscoveredImage, discover_images, resolve_scan_folder
 from ..scanner.executor import resolve_workers
 from ..scanner.pipeline import run_pipeline
-from ..scanner.worker import ScanOutcome
+from ..scanner.worker import CropOutcome, CropRegion, ScanOutcome
 
 log = get_logger(__name__)
 
@@ -94,6 +100,10 @@ class ImageEvent:
     #: Presente quando `decision` é `pending`/`manual`/`unmatched`: é por este
     #: ID que `scan review` (Fase 6) confirma ou rejeita a leitura depois.
     result_id: int | None = None
+    #: Posição deste recorte dentro da foto de origem e quantos recortes ela
+    #: rendeu (plano §22). `0`/`1` é o caso de hoje — uma foto, uma carta.
+    crop_index: int = 0
+    crop_count: int = 1
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -109,6 +119,8 @@ class ImageEvent:
             "confidence": None if self.confidence is None else round(self.confidence, 4),
             "applied": self.applied,
             "error": self.error,
+            "crop_index": self.crop_index,
+            "crop_count": self.crop_count,
         }
 
 
@@ -172,6 +184,13 @@ class ScanService:
         # `matching/print_language.py`); uma base própria de traduções entra
         # aqui depois, sem tocar no resto do serviço.
         self.language_resolver = language_resolver or SiblingPrintLanguageResolver()
+        # Cascata de fallback (plano §6.3, Fase 10): criada sob demanda, uma
+        # vez por serviço. `_fallback_checked` distingue "ainda não tentei"
+        # de "tentei e não deu" — sem isso, cada imagem duvidosa repetiria a
+        # falha (chave ausente, pacote não instalado) em vez de degradar uma
+        # única vez e seguir em silêncio pelo resto do scan (ADR 0004).
+        self._fallback_provider: OCRProvider | None = None
+        self._fallback_checked = False
 
     def scan(
         self,
@@ -184,9 +203,22 @@ class ScanService:
         apply: bool = True,
         no_auto: bool = False,
         reprocess: bool = False,
+        grid: bool = False,
+        grid_size: tuple[int, int] | None = None,
         progress: ProgressCallback | None = None,
     ) -> ScanRunReport:
         started = time.perf_counter()
+        # Informar `grid_size` ("--grid-size 3x3") já liga o modo grade
+        # sozinho — não faz sentido pedir os dois separadamente.
+        effective_grid = grid or grid_size is not None
+        if effective_grid and grid_size is None:
+            # Falha cedo e uma única vez, antes de tocar no banco — não por
+            # imagem lá no worker, onde daria N erros idênticos (plano §22).
+            # Só quando vai mesmo detectar por contorno: `grid_size` explícito
+            # não usa `cv2` (é aritmética + a mesma heurística de borda
+            # Pillow-only de `detect_card_bounds`), então não precisa do
+            # extra `cv` instalado.
+            ensure_cv_available()
         resolved_folder = resolve_scan_folder(folder, self.settings)
         discovered = discover_images(resolved_folder, recursive=recursive, limit=limit)
 
@@ -213,6 +245,8 @@ class ScanService:
                 no_auto=no_auto,
                 reprocess=reprocess,
                 progress=progress,
+                grid=effective_grid,
+                grid_size=grid_size,
             )
             if apply:
                 session.commit()
@@ -384,6 +418,8 @@ class ScanService:
         no_auto: bool,
         reprocess: bool,
         progress: ProgressCallback | None,
+        grid: bool = False,
+        grid_size: tuple[int, int] | None = None,
     ) -> None:
         scan_repo = ScanRepository(session)
         collection_repo = CollectionRepository(session)
@@ -416,14 +452,21 @@ class ScanService:
             report.job_id = job.id
 
         provider = provider_name or self.settings.ocr_provider
-        outcomes = run_pipeline(to_process, self.settings, provider_name=provider, workers=workers)
+        outcomes = run_pipeline(
+            to_process,
+            self.settings,
+            provider_name=provider,
+            workers=workers,
+            grid_mode=grid,
+            grid_size=grid_size,
+        )
 
         job_id = job.id if job is not None else None
 
         since_commit = 0
         for outcome in outcomes:
             with log_context(image=outcome.path.name):
-                event = self._handle_outcome(
+                crop_events = self._handle_outcome(
                     outcome,
                     job_id=job_id,
                     scan_repo=scan_repo,
@@ -433,11 +476,12 @@ class ScanService:
                     apply=apply,
                     no_auto=no_auto,
                 )
-            report.events.append(event)
-            if progress is not None:
-                progress(event)
+            report.events.extend(crop_events)
+            for event in crop_events:
+                if progress is not None:
+                    progress(event)
 
-            since_commit += 1
+            since_commit += len(crop_events)
             if apply and since_commit >= COMMIT_BATCH_SIZE:
                 session.commit()
                 since_commit = 0
@@ -454,6 +498,36 @@ class ScanService:
                 failed=report.failed,
             )
 
+    def _upsert_scan_image(
+        self,
+        outcome: ScanOutcome,
+        scan_repo: ScanRepository,
+        job_id: int,
+        *,
+        status: str,
+        ocr_raw: dict[str, Any] | None,
+    ) -> ScanImage:
+        existing = scan_repo.find_by_hash(outcome.task.file_hash)
+        if existing is None:
+            return scan_repo.create_image(
+                job_id=job_id,
+                file_path=str(outcome.path),
+                file_hash=outcome.task.file_hash,
+                file_size=outcome.task.size,
+                status=status,
+                error=outcome.preprocess_error,
+                ocr_raw=ocr_raw,
+                ocr_ms=outcome.elapsed_ms,
+            )
+        scan_repo.update_image_reading(
+            existing,
+            status=status,
+            ocr_raw=ocr_raw,
+            ocr_ms=outcome.elapsed_ms,
+            error=outcome.preprocess_error,
+        )
+        return existing
+
     def _handle_outcome(
         self,
         outcome: ScanOutcome,
@@ -465,45 +539,93 @@ class ScanService:
         report: ScanRunReport,
         apply: bool,
         no_auto: bool,
-    ) -> ImageEvent:
+    ) -> list[ImageEvent]:
+        """Bookkeeping por foto; o matching/decisão de cada recorte é
+        delegado a `_handle_crop` — uma foto sem grade rende exatamente um
+        recorte (`CropRegion(0, 1, None)`), então o caminho de hoje (uma
+        foto = uma carta) produz exatamente um `ImageEvent`, como sempre.
+        """
         report.processed += 1
+
+        if outcome.preprocess_status is not None:
+            # A foto inteira falhou antes de qualquer recorte (arquivo
+            # corrompido, formato inválido) — `crops` nunca chegou a existir.
+            if apply:
+                assert job_id is not None  # `apply=True` sempre cria o job em `_run`
+                self._upsert_scan_image(
+                    outcome, scan_repo, job_id, status=outcome.preprocess_status, ocr_raw=None
+                )
+            report.failed += 1
+            return [
+                ImageEvent(
+                    file_name=outcome.path.name,
+                    status=outcome.preprocess_status,
+                    error=outcome.preprocess_error,
+                )
+            ]
 
         image = None
         if apply:
-            assert job_id is not None  # `apply=True` sempre cria o job em `_run`
-            existing = scan_repo.find_by_hash(outcome.task.file_hash)
-            ocr_raw = outcome.ocr.as_dict() if outcome.ocr else None
-            if existing is None:
-                image = scan_repo.create_image(
-                    job_id=job_id,
-                    file_path=str(outcome.path),
-                    file_hash=outcome.task.file_hash,
-                    file_size=outcome.task.size,
-                    status=outcome.status,
-                    error=outcome.error,
-                    ocr_raw=ocr_raw,
-                    ocr_ms=outcome.elapsed_ms,
-                )
-            else:
-                scan_repo.update_image_reading(
-                    existing,
-                    status=outcome.status,
-                    ocr_raw=ocr_raw,
-                    ocr_ms=outcome.elapsed_ms,
-                    error=outcome.error,
-                )
-                image = existing
+            assert job_id is not None
+            ocr_raw = {
+                "crops": [crop.ocr.as_dict() for crop in outcome.crops if crop.ocr is not None]
+            }
+            image_status = (
+                "ok" if any(not crop.failed for crop in outcome.crops) else outcome.crops[0].status
+            )
+            image = self._upsert_scan_image(
+                outcome, scan_repo, job_id, status=image_status, ocr_raw=ocr_raw
+            )
 
-        if outcome.failed or outcome.status == "ocr_empty":
+        return [
+            self._handle_crop(
+                crop,
+                outcome,
+                image,
+                engine=engine,
+                report=report,
+                apply=apply,
+                no_auto=no_auto,
+                scan_repo=scan_repo,
+                collection_repo=collection_repo,
+            )
+            for crop in outcome.crops
+        ]
+
+    def _handle_crop(
+        self,
+        crop: CropOutcome,
+        outcome: ScanOutcome,
+        image: ScanImage | None,
+        *,
+        engine: MatchingEngine,
+        report: ScanRunReport,
+        apply: bool,
+        no_auto: bool,
+        scan_repo: ScanRepository,
+        collection_repo: CollectionRepository,
+    ) -> ImageEvent:
+        if crop.failed or crop.status == "ocr_empty":
             report.failed += 1
             return ImageEvent(
                 file_name=outcome.path.name,
-                status=outcome.status,
-                error=outcome.error,
+                status=crop.status,
+                error=crop.error,
+                crop_index=crop.region.index,
+                crop_count=crop.region.count,
             )
 
-        match_result = engine.match(outcome.read_name, outcome.read_code or None)
+        match_result = engine.match(crop.read_name, crop.read_code or None)
         decision = match_result.decision
+
+        # Cascata (plano §6.3): só a fração duvidosa reprocessa por LLM —
+        # decisão `auto` já está resolvida e não vale o custo/latência extra.
+        if decision != Decision.AUTO:
+            fallback = self._try_fallback(outcome.path, crop.region, engine)
+            if fallback is not None and fallback.confidence >= match_result.confidence:
+                match_result = fallback
+                decision = fallback.decision
+
         if no_auto and decision == Decision.AUTO:
             decision = Decision.PENDING
 
@@ -514,10 +636,13 @@ class ScanService:
                 image.id,
                 decision,
                 match_result,
-                ocr_name_raw=outcome.read_name or None,
-                ocr_code_raw=outcome.read_code or None,
+                ocr_name_raw=crop.read_name or None,
+                ocr_code_raw=crop.read_code or None,
                 scan_repo=scan_repo,
                 collection_repo=collection_repo,
+                crop_index=crop.region.index,
+                crop_count=crop.region.count,
+                source_bbox=crop.region.bbox,
             )
 
         # `applied` só significa algo em `apply=True` (é a gravação de verdade
@@ -535,15 +660,17 @@ class ScanService:
 
         return ImageEvent(
             file_name=outcome.path.name,
-            status=outcome.status,
+            status=crop.status,
             decision=decision.value,
             result_id=result_id,
-            ocr_name=outcome.read_name or None,
-            ocr_code=outcome.read_code or None,
+            ocr_name=crop.read_name or None,
+            ocr_code=crop.read_code or None,
             card_name=match_result.card_name,
             set_code=match_result.set_code,
             confidence=match_result.confidence,
             applied=applied,
+            crop_index=crop.region.index,
+            crop_count=crop.region.count,
         )
 
     def _apply_decision(
@@ -556,6 +683,9 @@ class ScanService:
         ocr_code_raw: str | None,
         scan_repo: ScanRepository,
         collection_repo: CollectionRepository,
+        crop_index: int = 0,
+        crop_count: int = 1,
+        source_bbox: BoundingBox | None = None,
     ) -> tuple[bool, int]:
         """Grava o `ScanResult` e, se for o caso, soma a cópia na coleção.
 
@@ -580,16 +710,22 @@ class ScanService:
             candidates=match_result.candidates or None,
             decision=decision.value,
             detected_language=match_result.matched_language,
+            crop_index=crop_index,
+            crop_count=crop_count,
+            source_bbox=source_bbox,
         )
 
         if decision != Decision.AUTO or match_result.card_id is None:
             return False, result.id
 
-        # Guarda de idempotência: esta imagem já contribuiu antes? Isso só
+        # Guarda de idempotência: este recorte já contribuiu antes? Isso só
         # pode acontecer sob --reprocess — uma imagem nova nunca tem
-        # resultado anterior aplicado.
-        if scan_repo.has_applied_result(scan_image_id):
-            log.info("scan.reprocess_not_reapplied", scan_image_id=scan_image_id)
+        # resultado anterior aplicado. Filtrado por `crop_index` porque numa
+        # foto com grade cada recorte é uma carta diferente (plano §22).
+        if scan_repo.has_applied_result(scan_image_id, crop_index=crop_index):
+            log.info(
+                "scan.reprocess_not_reapplied", scan_image_id=scan_image_id, crop_index=crop_index
+            )
             return False, result.id
 
         # Sem revisão humana aqui — é a alta confiança que dispensa isso —
@@ -623,3 +759,89 @@ class ScanService:
         item = collection_repo.add_copies(key, 1, source="scan")
         scan_repo.mark_applied(result, item.id)
         return True, result.id
+
+    # -------------------------------------------------------- fallback LLM
+
+    def _get_fallback_provider(self) -> OCRProvider | None:
+        """Provider da cascata (plano §6.3), criado e aquecido uma vez.
+
+        `YGS_OCR_FALLBACK_PROVIDER=none` (padrão) desliga a cascata sem
+        custo algum — nem o módulo do provider é importado. Qualquer falha
+        ao criar/aquecer (pacote ausente, chave ausente, API fora do ar na
+        primeira tentativa) desliga a cascata pelo resto deste `ScanService`
+        e loga uma vez, nunca por imagem — é o "degrada em silêncio" do
+        ADR 0004, não um erro que derruba o scan.
+        """
+        if self._fallback_checked:
+            return self._fallback_provider
+
+        self._fallback_checked = True
+        name = self.settings.ocr_fallback_provider
+        if not name or name == "none":
+            return None
+
+        try:
+            provider = create_provider(name, self.settings)
+            provider.warmup()
+        except YugiohScannerError as exc:
+            log.info("scan.fallback_unavailable", provider=name, reason=str(exc))
+            return None
+
+        self._fallback_provider = provider
+        return provider
+
+    def _try_fallback(
+        self, path: Path, region: CropRegion, engine: MatchingEngine
+    ) -> MatchResult | None:
+        """Reprocessa uma leitura duvidosa com o provider de fallback.
+
+        Reabre e prepara a imagem de novo (o worker já fechou a sua cópia —
+        plano §2.3, workers não sobrevivem além do próprio processamento) e
+        manda a região `full` — a carta inteira recortada/reduzida, nunca a
+        original (plano §6.4). Recorta para `region.bbox` antes de preparar,
+        senão uma foto com grade (plano §22) reprocessaria a página inteira
+        no lugar da célula duvidosa. Roda sequencialmente no processo
+        principal: só a fração `pending`/`manual` chega aqui (~15% do plano
+        §6.3), e cada chamada já é I/O-bound por natureza; paralelizar isso
+        fica para quando o volume justificar (ver `Settings.llm_concurrency`,
+        ainda não usado aqui — reservado para uma futura versão em lote/
+        Batches API, plano §6.4, não implementada nesta fase).
+        """
+        provider = self._get_fallback_provider()
+        if provider is None:
+            return None
+
+        try:
+            image = load_image(path, max_pixels=self.settings.max_image_pixels)
+        except ImageError:
+            return None
+
+        try:
+            prepared = prepare_regions(image, source=path, region=region.bbox)
+        except ImageError:
+            return None
+        finally:
+            image.close()
+
+        try:
+            full = prepared.regions.get(REGION_FULL)
+            if full is None:
+                return None
+            request = OCRRequest(regions={REGION_FULL: full}, source=str(path))
+            result = provider.read(request)
+        except YugiohScannerError as exc:
+            log.info("scan.fallback_failed", file=path.name, reason=str(exc))
+            return None
+        finally:
+            prepared.close()
+
+        name = result.joined(REGION_NAME) or result.joined(REGION_FULL)
+        code = result.best(REGION_CODE)
+        fallback_match = engine.match(name, code or None)
+        log.info(
+            "scan.fallback_used",
+            file=path.name,
+            crop_index=region.index,
+            confidence=round(fallback_match.confidence, 3),
+        )
+        return fallback_match

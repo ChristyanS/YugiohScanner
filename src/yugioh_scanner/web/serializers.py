@@ -46,6 +46,21 @@ def result_to_dict(result: ScanResult, *, with_image: bool = True) -> dict[str, 
         "collection_item_id": result.collection_item_id,
         "created_at": result.created_at.isoformat(),
         "decided_at": result.decided_at.isoformat() if result.decided_at else None,
+        # Grade de cartas (plano §22, ADR 0011): `0`/`1`/`None` no caso de
+        # hoje (uma foto = uma carta) — colunas simples, sem custo extra de
+        # lazy-load, por isso sempre presentes (não dependem de `with_image`).
+        "crop_index": result.crop_index,
+        "crop_count": result.crop_count,
+        "source_bbox": (
+            {
+                "left": result.source_bbox_left,
+                "top": result.source_bbox_top,
+                "right": result.source_bbox_right,
+                "bottom": result.source_bbox_bottom,
+            }
+            if result.source_bbox_left is not None
+            else None
+        ),
     }
     if with_image:
         payload["image"] = {

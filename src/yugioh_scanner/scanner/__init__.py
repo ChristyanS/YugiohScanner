@@ -16,9 +16,20 @@ from .executor import (
     resolve_workers,
 )
 from .pipeline import run_pipeline
-from .worker import ScanOutcome, ScanTask, init_worker, process_task, reset_provider, set_provider
+from .worker import (
+    CropOutcome,
+    CropRegion,
+    ScanOutcome,
+    ScanTask,
+    init_worker,
+    process_task,
+    reset_provider,
+    set_provider,
+)
 
 __all__ = [
+    "CropOutcome",
+    "CropRegion",
     "DiscoveredImage",
     "ProcessPoolScanExecutor",
     "ScanExecutor",

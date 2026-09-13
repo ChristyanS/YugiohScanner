@@ -31,6 +31,10 @@ paddle = ["paddleocr>=2.7", "paddlepaddle>=2.6"]
 easyocr = ["easyocr>=1.7"]
 # Fallback por LLM Vision.
 llm = ["anthropic>=0.40"]
+# Detecção de grade de cartas (múltiplas cartas por foto).
+cv = ["opencv-python>=4.9", "numpy>=1.26"]
+# Captura via scanner/impressora Windows (WIA).
+wia = ["pywin32>=306; sys_platform == 'win32'"]
 # Interface web.
 web = ["fastapi>=0.111", "uvicorn[standard]>=0.30", "jinja2>=3.1", "python-multipart>=0.0.9"]
 dev = [
@@ -86,7 +90,16 @@ disallow_any_generics = true
 strict_equality = true
 
 [[tool.mypy.overrides]]
-module = ["rapidocr_onnxruntime.*", "pytesseract.*", "paddleocr.*", "easyocr.*"]
+module = [
+    "rapidocr_onnxruntime.*",
+    "pytesseract.*",
+    "paddleocr.*",
+    "easyocr.*",
+    "anthropic.*",
+    "cv2.*",
+    "win32com.*",
+    "pywintypes.*",
+]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

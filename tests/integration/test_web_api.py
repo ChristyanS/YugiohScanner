@@ -13,13 +13,15 @@ import json
 import time
 from collections.abc import Iterator
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
 
-from tests.factories import make_card_image
+from tests.factories import make_card_image, make_grid_photo
 from yugioh_scanner.config import Settings
 from yugioh_scanner.db.session import Database
+from yugioh_scanner.errors import NoScannerDeviceFoundError
 from yugioh_scanner.ocr.fake_provider import FakeOCRProvider
 from yugioh_scanner.ocr.registry import register_provider, unregister_provider
 from yugioh_scanner.scanner.worker import reset_provider
@@ -436,3 +438,244 @@ class TestScanResultActions:
         remaining_ids = {r["id"] for r in remaining}
         assert target["id"] not in remaining_ids
         assert pending[1]["id"] not in remaining_ids
+
+
+class _SequentialOCRProvider:
+    """Cada `read()` devolve a próxima leitura da lista, na ordem.
+
+    `FakeOCRProvider` roteiriza só por nome de arquivo (plano §19.3) — não
+    serve para uma foto-grade, onde todos os recortes compartilham o mesmo
+    arquivo de origem e precisam de leituras diferentes por chamada (mesma
+    técnica de `TestGridMode` em `test_scan_service.py`).
+    """
+
+    name = "grid-sequential"
+    is_io_bound = False
+
+    def __init__(self, readings: list[dict[str, str]]) -> None:
+        self._readings = readings
+        self._calls = 0
+
+    def warmup(self) -> None:
+        return
+
+    def close(self) -> None:
+        return
+
+    def read(self, request: object) -> object:
+        from yugioh_scanner.ocr.base import OCRResult, TextLine
+
+        texts = self._readings[self._calls % len(self._readings)]
+        self._calls += 1
+        return OCRResult(
+            texts={
+                region: (TextLine(text=value, confidence=0.95),)
+                for region, value in texts.items()
+                if value
+            },
+            provider=self.name,
+            elapsed_ms=1,
+        )
+
+
+class TestGridViaWeb:
+    """Grade de cartas por foto (plano §22, ADR 0011) exposta em `/api/v1/scans`."""
+
+    def test_grid_scan_reports_crop_index_and_count_over_sse(
+        self, client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        readings = [
+            {"name": "Blue-Eyes White Dragon", "code": "CT13-EN008"},
+            {"name": "Dark Magician", "code": "SDK-001"},
+        ]
+        folder = tmp_path / "grid"
+        _photo, boxes = make_grid_photo(folder, "sheet.jpg", readings)
+
+        provider = _SequentialOCRProvider(readings)
+        register_provider("grid-sequential", lambda _settings: provider)
+        # `ensure_cv_available`/`detect_grid_cells` fakeados: a suíte rápida
+        # não pode depender do extra `cv` (OpenCV) estar instalado.
+        monkeypatch.setattr(
+            "yugioh_scanner.services.scan_service.ensure_cv_available", lambda: None
+        )
+        monkeypatch.setattr(
+            "yugioh_scanner.scanner.worker.detect_grid_cells", lambda _image: list(boxes)
+        )
+        try:
+            response = client.post(
+                "/api/v1/scans",
+                json={
+                    "folder": str(folder),
+                    "provider": "grid-sequential",
+                    "workers": 1,
+                    "grid": True,
+                    "auto": False,
+                },
+            )
+            assert response.status_code == 200
+            events = _collect_sse_events(client, response.json()["run_id"])
+        finally:
+            unregister_provider("grid-sequential")
+            reset_provider()
+
+        image_events = [e for e in events if e["event"] == "image"]
+        assert len(image_events) == 2
+        assert sorted(e["crop_index"] for e in image_events) == [0, 1]
+        assert all(e["crop_count"] == 2 for e in image_events)
+
+        job_id = next(e for e in events if e["event"] == "done")["job_id"]
+        results = client.get(f"/api/v1/scans/{job_id}/results").json()
+        assert len(results) == 2
+        assert all(r["crop_count"] == 2 for r in results)
+        assert all(r["source_bbox"] is not None for r in results)
+
+    def test_grid_size_explicit_needs_no_cv2_mocking(
+        self, client: TestClient, tmp_path: Path
+    ) -> None:
+        """`grid_size` ("3x3") pula `detect_grid_cells`/`ensure_cv_available`
+        de vez — diferente do teste acima, este não fakeia nada de `cv2`."""
+        readings = [
+            {"name": "Blue-Eyes White Dragon", "code": "CT13-EN008"},
+            {"name": "Dark Magician", "code": "SDK-001"},
+            {"name": "Pot of Greed"},
+            {"name": "ZZQX WROMBAT FLURB"},
+        ]
+        folder = tmp_path / "grid"
+        make_grid_photo(folder, "sheet.jpg", readings)
+
+        provider = _SequentialOCRProvider(readings)
+        register_provider("grid-sequential", lambda _settings: provider)
+        try:
+            response = client.post(
+                "/api/v1/scans",
+                json={
+                    "folder": str(folder),
+                    "provider": "grid-sequential",
+                    "workers": 1,
+                    "grid_size": "2x2",
+                },
+            )
+            assert response.status_code == 200
+            events = _collect_sse_events(client, response.json()["run_id"])
+        finally:
+            unregister_provider("grid-sequential")
+            reset_provider()
+
+        image_events = [e for e in events if e["event"] == "image"]
+        assert len(image_events) == 4
+        assert sorted(e["crop_index"] for e in image_events) == [0, 1, 2, 3]
+
+    def test_invalid_grid_size_is_a_clean_422(self, client: TestClient, tmp_path: Path) -> None:
+        response = client.post(
+            "/api/v1/scans",
+            json={"folder": str(tmp_path), "grid_size": "lixo"},
+        )
+        assert response.status_code == 422
+        assert "hint" in response.json()
+
+
+class TestCaptureApi:
+    """Captura via scanner WIA (plano §22, ADR 0011) — backend sempre
+    mockado, sem hardware nem `pywin32` de verdade."""
+
+    def test_list_devices_returns_backend_devices(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        backend = SimpleNamespace(
+            list_devices=lambda: [SimpleNamespace(id="dev-1", name="Scanner A")]
+        )
+        monkeypatch.setattr(
+            "yugioh_scanner.web.routes.api.create_backend", lambda _name: backend
+        )
+
+        response = client.get("/api/v1/capture/devices")
+
+        assert response.status_code == 200
+        assert response.json() == [{"id": "dev-1", "name": "Scanner A"}]
+
+    def test_capture_creates_folder_and_returns_it(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls: list[tuple[Path, str | None, int, str]] = []
+
+        def fake_capture(
+            output_dir: Path, *, device_id: str | None = None, dpi: int = 300, color_mode: str = "color"
+        ) -> Path:
+            calls.append((output_dir, device_id, dpi, color_mode))
+            output_dir.mkdir(parents=True, exist_ok=True)
+            path = output_dir / f"capture-{len(calls)}.jpg"
+            make_card_image(path)
+            return path
+
+        backend = SimpleNamespace(capture=fake_capture)
+        monkeypatch.setattr(
+            "yugioh_scanner.web.routes.api.create_backend", lambda _name: backend
+        )
+
+        response = client.post("/api/v1/capture", json={"dpi": 600, "color": False})
+
+        assert response.status_code == 200
+        body = response.json()
+        assert Path(body["folder"]).exists()
+        assert len(calls) == 1
+        assert calls[0][2] == 600 and calls[0][3] == "gray"
+
+    def test_capture_reuses_the_same_folder_across_pages(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Achado real de uso (plano §22): capturar em lote sem pausa não
+        dava tempo de trocar a folha na mesa do scanner. Agora é uma página
+        por chamada — o cliente reenvia o `folder` da resposta anterior para
+        acumular todas as páginas no mesmo lugar."""
+        calls: list[Path] = []
+
+        def fake_capture(
+            output_dir: Path, *, device_id: str | None = None, dpi: int = 300, color_mode: str = "color"
+        ) -> Path:
+            calls.append(output_dir)
+            output_dir.mkdir(parents=True, exist_ok=True)
+            path = output_dir / f"capture-{len(calls)}.jpg"
+            make_card_image(path)
+            return path
+
+        backend = SimpleNamespace(capture=fake_capture)
+        monkeypatch.setattr(
+            "yugioh_scanner.web.routes.api.create_backend", lambda _name: backend
+        )
+
+        first = client.post("/api/v1/capture", json={}).json()
+        second = client.post("/api/v1/capture", json={"folder": first["folder"]}).json()
+
+        assert first["folder"] == second["folder"]
+        assert len(calls) == 2
+        assert calls[0] == calls[1]
+
+    def test_capture_rejects_a_folder_outside_the_uploads_area(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        backend = SimpleNamespace(capture=lambda *a, **k: tmp_path)
+        monkeypatch.setattr(
+            "yugioh_scanner.web.routes.api.create_backend", lambda _name: backend
+        )
+
+        response = client.post(
+            "/api/v1/capture", json={"folder": str(tmp_path / "fora-do-uploads")}
+        )
+
+        assert response.status_code == 422
+
+    def test_capture_error_maps_to_422(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def raise_not_found() -> list[object]:
+            raise NoScannerDeviceFoundError()
+
+        backend = SimpleNamespace(list_devices=raise_not_found)
+        monkeypatch.setattr(
+            "yugioh_scanner.web.routes.api.create_backend", lambda _name: backend
+        )
+
+        response = client.get("/api/v1/capture/devices")
+
+        assert response.status_code == 422
+        assert "hint" in response.json()

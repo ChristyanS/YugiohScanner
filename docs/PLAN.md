@@ -678,14 +678,18 @@ yugioh-scanner [--config PATH] [--log-level LEVEL] [--json] COMANDO
 | `scan PASTA` | Processa a pasta. |
 | `--workers N` | Default `cpu_count-1`, máximo 8. |
 | `--provider NAME` | Sobrescreve `OCR_PROVIDER`. |
+| `--fallback-provider NAME` | Sobrescreve `OCR_FALLBACK_PROVIDER` (Fase 10 — ver §6.3). |
 | `--recursive` | Inclui subpastas. |
 | `--dry-run` | Processa e mostra; não grava nada na coleção. |
 | `--no-auto` | Nada é auto-adicionado; tudo vira `pending`. |
 | `--reprocess` | Re-executa OCR mesmo em imagens já vistas (por hash). |
 | `--interactive` | Confirma os `pending` no terminal, um a um. |
 | `--limit N` | Só as N primeiras (útil para calibrar). |
+| `--grid` | Detecta várias cartas numa mesma foto por contorno (grade 2x2, 3x3 etc.); precisa do extra `cv` (ver ADR 0011). Desligado por padrão. **Não confiável em fotos reais** (achado real: 2 de 9 cartas numa digitalização) — prefira `--grid-size` quando souber o layout. |
+| `--grid-size LINHASxCOLUNAS` | Layout explícito da grade (ex.: `3x3`, `2x4`), informado por você em vez de detectado — liga o modo grade sozinho, sem precisar de `--grid` nem do extra `cv` (ADR 0011). |
 | `scan status [JOB_ID]` | Progresso e estatísticas de um job. |
 | `scan review` | Fila interativa de pendências (imagem, OCR bruto, top-5, escolha por número). |
+| `scan-device [--device ID] [--list-devices] [--dpi N] [--color/--gray] [--pages N] [--grid-size LxC]` | Captura de um scanner/impressora Windows via WIA e processa na hora; aceita as mesmas flags de `scan` (`--grid` ligado por padrão aqui — ver ADR 0011). Precisa do extra `wia`. |
 
 ### Coleção
 
@@ -1191,7 +1195,7 @@ class Settings(BaseSettings):
     # web
     web_host: str = "127.0.0.1"
     web_port: int = 8000
-    max_upload_mb: int = 10
+    max_upload_mb: int = 50
     max_upload_files: int = 200
 
     # observabilidade
@@ -1398,7 +1402,7 @@ App local e pessoal — mas os vetores abaixo são reais mesmo assim, e vários 
 |---|---|
 | **API keys** | `SecretStr` + `.env` fora do git + `.env.example` sem valores + redação automática no logger (`sk-ant-*`) + `config show` mascarado. Nunca no banco, nunca em `scan_result.raw`. |
 | **Path traversal** | O caminho de scan é `Path(user_input).resolve()` e, se `ALLOWED_SCAN_ROOTS` estiver configurado, precisa satisfazer `p.is_relative_to(root)` para algum root. Symlinks resolvidos **antes** da checagem. Sem allowlist (default local) ainda bloqueamos caminhos que escapem para diretórios do sistema. |
-| **Upload de arquivos** | Extensão *e* magic bytes verificados; `Image.verify()` obrigatório; limite de **10 MB por arquivo** e **200 arquivos** por requisição, com `MAX_PIXELS` contra decompression bomb; nome de arquivo **descartado** e substituído por `{uuid}.{ext}` (elimina `../`, nomes reservados do Windows como `CON`/`NUL`, e caracteres de controle). |
+| **Upload de arquivos** | Extensão *e* magic bytes verificados; `Image.verify()` obrigatório; limite de **50 MB por arquivo** (PNGs de scanner real passam fácil de 15-20 MB — ver ADR 0011) e **200 arquivos** por requisição, com `MAX_PIXELS` contra decompression bomb; nome de arquivo **descartado** e substituído por `{uuid}.{ext}` (elimina `../`, nomes reservados do Windows como `CON`/`NUL`, e caracteres de controle). |
 | **Servir arquivos** | O endpoint de imagem recebe `card_id` (inteiro) e monta o caminho internamente — **nunca** aceita caminho vindo do cliente. |
 | **SQL injection** | SQLAlchemy com parâmetros ligados. A única query textual é o `MATCH` do FTS5, cujo argumento é sanitizado (tokens `[a-z0-9]` + `*`, aspas escapadas) — FTS5 tem sintaxe própria e aceitar entrada crua ali é uma injeção real. |
 | **CSV injection** | Célula iniciada por `= + - @ TAB CR` recebe prefixo `'`. Um nome de carta não faz isso, mas o campo `notes` é livre e vai para o Excel de outra pessoa. |
@@ -1423,7 +1427,7 @@ Nada disso é construído agora; a lista existe para verificar que a arquitetura
 | Raridade automática | `card_print.rarity` já existe; o provider Claude já retorna `rarity` no schema. |
 | Idioma automático | `collection_item.language` já existe; o código de região do print já é extraído. |
 | Condição da carta | `collection_item.condition` já existe com vocabulário controlado. |
-| **Múltiplas cartas numa foto** | O único ponto que exige mudança de contrato: `ScanImage 1—1 ScanResult` viraria `1—N`. Por isso `scan_result` **já é tabela separada** com FK, e não colunas dentro de `scan_image`. A migração é trivial; o inverso não seria. |
+| ~~Múltiplas cartas numa foto~~ | **Implementado** (ver [ADR 0011](adr/0011-grade-de-cartas-e-captura-wia.md)): `scan_result` ganhou `crop_index`/`crop_count`/`source_bbox_*` — a migração `0007` foi exatamente a "trivial" prevista aqui, sem tocar no shape da tabela. Detecção de grade via OpenCV opcional (`--grid`, não confiável em fotos reais) ou layout explícito (`--grid-size`, recomendado), fan-out dentro do worker. |
 | Importar coleção existente | `ExportProfile` ganha um irmão `ImportProfile` com o mesmo registry; `source='import'` já está no enum. |
 | Sincronizar com outras plataformas | Camada de serviços já isolada; um `sync_service` externo consome os mesmos repositórios. |
 | Docker | Sem dependências de sistema (RapidOCR é pip puro) → `Dockerfile` de ~15 linhas. `DATA_PATH` já é configurável para volume. |
@@ -1624,6 +1628,24 @@ Onze fases pequenas e independentes. **Regra transversal: a aplicação fica exe
 - Ganho medido no mesmo corpus da Fase 9, com custo por imagem reportado.
 
 **Testes:** provider com HTTP mockado (schema, erros, timeout, rate limit). Nunca chama a API real no CI.
+
+> **Desvios implementados (Fase 10, ver [ADR 0004](adr/0004-claude-vision-fallback-opcional.md)):**
+>
+> 1. **Cascata síncrona, não em lote.** O plano deixava em aberto a
+>    Message Batches API (plano §6.4: "para lotes grandes, 50% do custo,
+>    assíncrono"). A implementação chama a API uma vez por imagem duvidosa,
+>    sequencialmente, no processo principal — só ~15% das imagens chegam
+>    lá, e o ganho de custo do Batches não compensava a complexidade extra
+>    (submeter lote, poll, reconciliar com o laço de resultados por imagem)
+>    nesta primeira versão. `Settings.llm_concurrency` já existe para uma
+>    versão futura paralela/em lote, mas ainda não é usado.
+> 2. **"Ganho medido no corpus da Fase 9" não foi feito.** Esse critério de
+>    aceitação depende de rodar a cascata contra `tests/fixtures/cards/`
+>    com uma chave de API real e reportar custo por imagem — uma ação do
+>    usuário (custo real em dinheiro), não algo que o código sozinho pode
+>    cumprir. O restante do critério (reprocessa só o que ficou duvidoso,
+>    degrada em silêncio sem chave, structured outputs sem regex) está
+>    implementado e testado com o SDK mockado.
 
 ---
 

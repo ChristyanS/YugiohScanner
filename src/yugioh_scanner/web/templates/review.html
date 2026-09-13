@@ -9,7 +9,10 @@
 
 <div id="review-body" class="review-grid" hidden>
   <div>
-    <img id="photo" class="roi" alt="Foto original">
+    <div id="photo-wrap" class="photo-wrap">
+      <img id="photo" class="roi" alt="Foto original">
+    </div>
+    <p id="crop-label" class="crop-label" hidden></p>
     <p><strong>OCR — nome:</strong> <span id="ocr-name"></span></p>
     <p><strong>OCR — código:</strong> <span id="ocr-code"></span></p>
   </div>
@@ -67,6 +70,8 @@ const counter = document.getElementById("counter");
 const emptyState = document.getElementById("empty-state");
 const body = document.getElementById("review-body");
 const photo = document.getElementById("photo");
+const photoWrap = document.getElementById("photo-wrap");
+const cropLabel = document.getElementById("crop-label");
 const ocrName = document.getElementById("ocr-name");
 const ocrCode = document.getElementById("ocr-code");
 const candidatesEl = document.getElementById("candidates");
@@ -96,6 +101,44 @@ async function loadQueue() {
 
 function current() { return queue[index]; }
 
+// Grade de cartas (plano §22, ADR 0011): quando o recorte em revisão veio de
+// uma foto com várias cartas, mostra só aquele recorte — ampliado, preenchendo
+// o quadro — em vez da foto inteira com um destaque pequeno (a carta ficava
+// pequena demais para comparar com os candidatos, achado real do usuário).
+//
+// Técnica: a foto continua sendo a mesma (nunca recortamos de verdade no
+// servidor), só ampliamos e deslocamos via CSS. `source_bbox` é normalizado
+// (0..1); dimensionar a `<img>` para `100/largura_do_recorte`% do contêiner
+// faz o recorte inteiro ocupar exatamente 100% da largura, e posicioná-la em
+// `-100*esquerda/largura`% alinha a borda esquerda do recorte com a borda do
+// contêiner. É só aritmética — funciona mesmo que a foto ainda não tenha
+// carregado (nada aqui depende do evento `load`, ao contrário da primeira
+// versão, que só reposicionava o destaque quando o navegador confirmava o
+// carregamento — e como as 9 células de uma grade reusam a mesma URL de
+// imagem, o navegador não reemite esse evento a cada troca de recorte — o
+// destaque ficava preso na posição da primeira carta revisada).
+function updateCropOverlay(r) {
+  if (r.crop_count > 1 && r.source_bbox) {
+    cropLabel.hidden = false;
+    cropLabel.textContent = `Carta ${r.crop_index + 1} de ${r.crop_count} nesta foto`;
+    const box = r.source_bbox;
+    const boxWidth = box.right - box.left;
+    const boxHeight = box.bottom - box.top;
+    photoWrap.classList.add("cropped");
+    photo.style.width = `${100 / boxWidth}%`;
+    photo.style.height = `${100 / boxHeight}%`;
+    photo.style.left = `${(-100 * box.left) / boxWidth}%`;
+    photo.style.top = `${(-100 * box.top) / boxHeight}%`;
+  } else {
+    cropLabel.hidden = true;
+    photoWrap.classList.remove("cropped");
+    photo.style.width = "";
+    photo.style.height = "";
+    photo.style.left = "";
+    photo.style.top = "";
+  }
+}
+
 function render() {
   showError("");
   if (!queue.length) {
@@ -110,6 +153,7 @@ function render() {
 
   const r = current();
   photo.src = `/api/v1/scan-images/${r.image.id}/file`;
+  updateCropOverlay(r);
   ocrName.textContent = r.ocr_name_raw || "(vazio)";
   ocrCode.textContent = r.ocr_code_raw || "(vazio)";
   quantityInput.value = 1;

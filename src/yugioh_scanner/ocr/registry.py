@@ -19,6 +19,7 @@ from .base import OCRProvider
 _REGISTRY: dict[str, tuple[str, str]] = {
     "rapidocr": ("yugioh_scanner.ocr.rapidocr_provider", "ocr"),
     "tesseract": ("yugioh_scanner.ocr.tesseract_provider", "tesseract"),
+    "claude": ("yugioh_scanner.ocr.claude_provider", "llm"),
     "fake": ("yugioh_scanner.ocr.fake_provider", ""),
 }
 

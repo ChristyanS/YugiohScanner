@@ -19,10 +19,12 @@ import pytest
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from tests.factories import make_card_image, make_corrupted_image
+from tests.factories import make_card_image, make_corrupted_image, make_grid_photo
 from yugioh_scanner.config import Settings
 from yugioh_scanner.db.session import Database
 from yugioh_scanner.db.tables import CardPrint, CollectionItem, ScanImage, ScanJob, ScanResult
+from yugioh_scanner.images.preprocess import BoundingBox
+from yugioh_scanner.ocr.base import BaseOCRProvider, OCRRequest, OCRResult, TextLine
 from yugioh_scanner.ocr.fake_provider import FakeOCRProvider
 from yugioh_scanner.ocr.registry import register_provider, unregister_provider
 from yugioh_scanner.scanner.worker import reset_provider
@@ -609,3 +611,302 @@ class TestJobIntrospection:
 
         with pytest.raises(JobNotFoundError):
             service(catalog, settings).job_detail(999999)
+
+
+class _FallbackOCRProvider:
+    """Fake do provider LLM (Fase 10) — mesma ideia do `FakeOCRProvider`, só
+    que registrado como `claude` para exercitar a cascata (plano §6.3) sem
+    tocar o SDK da Anthropic."""
+
+    name = "claude"
+    is_io_bound = True
+
+    def __init__(self, script: dict[str, dict[str, str]]) -> None:
+        self.script = script
+        self.calls: list[str] = []
+
+    def warmup(self) -> None:
+        return
+
+    def close(self) -> None:
+        return
+
+    def read(self, request: object) -> object:
+        from yugioh_scanner.ocr.base import REGION_CODE, REGION_NAME, OCRResult, TextLine
+
+        source = request.source  # type: ignore[attr-defined]
+        self.calls.append(source)
+        reading = self.script.get(Path(source).name, {})
+        texts: dict[str, tuple[TextLine, ...]] = {}
+        if reading.get("name"):
+            texts[REGION_NAME] = (TextLine(text=reading["name"], confidence=1.0),)
+        if reading.get("code"):
+            texts[REGION_CODE] = (TextLine(text=reading["code"], confidence=1.0),)
+        return OCRResult(texts=texts, provider=self.name)
+
+
+class TestLlmFallback:
+    """Cascata de fallback (plano §6.3, Fase 10): só a fração duvidosa
+    reprocessa por LLM, e o resultado só é adotado quando melhora."""
+
+    def test_fallback_rescues_an_unmatched_reading(
+        self, catalog: Database, settings: Settings, cards_folder: Path
+    ) -> None:
+        fallback = _FallbackOCRProvider(
+            {"garbage.jpg": {"name": "Blue-Eyes White Dragon", "code": "CT13-EN008"}}
+        )
+        register_provider("claude", lambda _settings: fallback)
+        try:
+            fb_settings = settings.model_copy(update={"ocr_fallback_provider": "claude"})
+            report = scan(catalog, fb_settings, cards_folder)
+        finally:
+            unregister_provider("claude")
+
+        assert report.auto_added == 4  # os 3 de sempre + garbage.jpg resgatado
+        assert report.pending == 0
+        # Só a leitura duvidosa (sem candidato) disparou a cascata — as três
+        # que já resolveram por OCR local não pagam o custo extra.
+        assert [Path(call).name for call in fallback.calls] == ["garbage.jpg"]
+
+    def test_fallback_disabled_by_default(
+        self, catalog: Database, settings: Settings, cards_folder: Path
+    ) -> None:
+        fallback = _FallbackOCRProvider(
+            {"garbage.jpg": {"name": "Blue-Eyes White Dragon", "code": "CT13-EN008"}}
+        )
+        register_provider("claude", lambda _settings: fallback)
+        try:
+            report = scan(catalog, settings, cards_folder)  # ocr_fallback_provider="none"
+        finally:
+            unregister_provider("claude")
+
+        assert report.pending == 1  # garbage.jpg continua sem candidato
+        assert fallback.calls == []
+
+    def test_fallback_without_credentials_degrades_silently(
+        self, catalog: Database, settings: Settings, cards_folder: Path
+    ) -> None:
+        """Sem `register_provider`, isto usa o `ClaudeVisionOCRProvider` de
+        verdade — sem `ANTHROPIC_API_KEY` no ambiente (garantido pelo
+        `_isolate_settings` de `conftest.py`), a cascata falha ao aquecer e
+        degrada em silêncio (ADR 0004), sem derrubar o scan."""
+        fb_settings = settings.model_copy(update={"ocr_fallback_provider": "claude"})
+
+        report = scan(catalog, fb_settings, cards_folder)
+
+        assert report.failed == 0
+        assert report.pending == 1  # garbage.jpg continua sem candidato
+
+
+class _SequentialOCRProvider(BaseOCRProvider):
+    """Cada `read()` devolve a próxima leitura da lista, na ordem.
+
+    `FakeOCRProvider` roteiriza só por nome de arquivo (plano §19.3) — não
+    serve para uma foto-grade, onde todos os recortes compartilham o mesmo
+    arquivo de origem e precisam de leituras diferentes por chamada.
+    """
+
+    name = "fake-sequential"
+    is_io_bound = False
+
+    def __init__(self, readings: list[dict[str, str]]) -> None:
+        self._readings = readings
+        self._calls = 0
+
+    def read(self, request: OCRRequest) -> OCRResult:
+        texts = self._readings[self._calls % len(self._readings)]
+        self._calls += 1
+        return OCRResult(
+            texts={
+                region: (TextLine(text=value, confidence=0.95),)
+                for region, value in texts.items()
+                if value
+            },
+            provider=self.name,
+            elapsed_ms=1,
+        )
+
+
+#: Mesmas leituras de `SCRIPT`, na ordem em que os recortes aparecem na foto
+#: composta: blue-eyes e dark-magician casam (com código), pot-of-greed casa
+#: sem código (print NULL), garbage não casa com nada.
+GRID_READINGS = [
+    {"name": "Blue-Eyes White Dragon", "code": "CT13-EN008"},
+    {"name": "Dark Magician", "code": "SDK-001"},
+    {"name": "Pot of Greed"},
+    {"name": "ZZQX WROMBAT FLURB"},
+]
+
+
+class TestGridMode:
+    """Grade de cartas por foto (plano §22, ADR 0011) — flag `--grid`."""
+
+    @pytest.fixture(autouse=True)
+    def _fake_sequential_provider(self) -> Iterator[None]:
+        register_provider(
+            "fake-sequential", lambda _settings: _SequentialOCRProvider(GRID_READINGS)
+        )
+        try:
+            yield
+        finally:
+            unregister_provider("fake-sequential")
+            reset_provider()
+
+    def _patch_grid_detection(
+        self, monkeypatch: pytest.MonkeyPatch, boxes: list[BoundingBox]
+    ) -> None:
+        # `ensure_cv_available` real faria `import cv2` de verdade — a suíte
+        # rápida não pode exigir o extra `cv` instalado. `detect_grid_cells`
+        # fakeado devolve caixas conhecidas em vez de detectar de verdade,
+        # deixando o teste focado no fan-out do pipeline, não na qualidade
+        # da detecção (isso é assunto de `tests/unit/test_grid.py`).
+        monkeypatch.setattr(
+            "yugioh_scanner.services.scan_service.ensure_cv_available", lambda: None
+        )
+        monkeypatch.setattr(
+            "yugioh_scanner.scanner.worker.detect_grid_cells", lambda _image: list(boxes)
+        )
+
+    def test_grid_scan_produces_one_result_per_card(
+        self,
+        catalog: Database,
+        settings: Settings,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        folder = tmp_path / "grid"
+        _photo, boxes = make_grid_photo(folder, "sheet.jpg", GRID_READINGS)
+        self._patch_grid_detection(monkeypatch, boxes)
+
+        report = scan(
+            catalog, settings, folder, provider_name="fake-sequential", workers=1, grid=True
+        )
+
+        assert report.total_images == 1
+        assert len(report.events) == 4
+        assert {event.crop_count for event in report.events} == {4}
+        assert sorted(event.crop_index for event in report.events) == [0, 1, 2, 3]
+        assert report.auto_added == 3  # tudo, menos o garbage
+        assert report.pending == 1
+        assert report.failed == 0
+
+        with catalog.session() as session:
+            image = session.execute(
+                select(ScanImage).where(ScanImage.file_path.like("%sheet.jpg"))
+            ).scalar_one()
+            results = (
+                session.execute(select(ScanResult).where(ScanResult.scan_image_id == image.id))
+                .scalars()
+                .all()
+            )
+            assert len(results) == 4
+            assert sorted(r.crop_index for r in results) == [0, 1, 2, 3]
+            assert all(r.crop_count == 4 for r in results)
+            assert all(r.source_bbox_left is not None for r in results)
+
+    def test_grid_disabled_by_default_treats_photo_as_single_card(
+        self,
+        catalog: Database,
+        settings: Settings,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        folder = tmp_path / "grid"
+        make_grid_photo(folder, "sheet.jpg", GRID_READINGS)
+        # `detect_grid_cells` não é fakeado de propósito: sem `--grid`, o
+        # worker nem deveria chamá-lo (plano §22 — o caminho de hoje não pode
+        # nem importar `images/grid.py`, muito menos o `cv2` por trás dele).
+
+        report = scan(catalog, settings, folder, provider_name="fake-sequential", workers=1)
+
+        assert report.total_images == 1
+        assert len(report.events) == 1
+        assert report.events[0].crop_count == 1
+        assert report.events[0].crop_index == 0
+
+    def test_single_card_photo_with_grid_enabled_is_unaffected(
+        self,
+        catalog: Database,
+        settings: Settings,
+        cards_folder: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Regressão: `--grid` não pode mudar o resultado de fotos normais
+        quando nenhuma grade é detectada — o caso comum (fotos avulsas)."""
+        monkeypatch.setattr(
+            "yugioh_scanner.services.scan_service.ensure_cv_available", lambda: None
+        )
+        monkeypatch.setattr("yugioh_scanner.scanner.worker.detect_grid_cells", lambda _image: [])
+
+        report = scan(catalog, settings, cards_folder, grid=True)
+
+        # Mesmos números do baseline sem --grid (test_high_confidence_matches_are_applied).
+        assert report.total_images == 4
+        assert report.auto_added == 3
+        assert report.pending == 1
+        assert report.failed == 0
+        assert all(event.crop_count == 1 for event in report.events)
+
+    def test_reprocess_grid_photo_does_not_reapply_already_applied_crop(
+        self,
+        catalog: Database,
+        settings: Settings,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Exercita a correção de `has_applied_result` (plano §22): sem o
+        filtro por `crop_index`, o recorte #0 aplicado bloquearia os demais
+        recortes da mesma `ScanImage` — tanto no scan original quanto num
+        `--reprocess` seguinte."""
+        folder = tmp_path / "grid"
+        _photo, boxes = make_grid_photo(folder, "sheet.jpg", GRID_READINGS)
+        self._patch_grid_detection(monkeypatch, boxes)
+
+        first = scan(
+            catalog, settings, folder, provider_name="fake-sequential", workers=1, grid=True
+        )
+        assert first.auto_added == 3
+
+        second = scan(
+            catalog,
+            settings,
+            folder,
+            provider_name="fake-sequential",
+            workers=1,
+            grid=True,
+            reprocess=True,
+        )
+
+        # Nada duplica: as 3 cartas continuam contando 1x cada na coleção.
+        items = snapshot(catalog)
+        assert len(items) == 3
+        assert all(quantity == 1 for _, _, quantity in items)
+        assert second.auto_added == 0  # já tinham sido aplicados no scan anterior
+
+    def test_grid_size_explicit_needs_no_cv2_mocking(
+        self, catalog: Database, settings: Settings, tmp_path: Path
+    ) -> None:
+        """`grid_size` (`--grid-size`) pula `detect_grid_cells`/
+        `ensure_cv_available` de vez — ao contrário dos testes acima, este
+        não precisa fakear nada de `cv2` (plano §22: o achado real foi que a
+        detecção automática por contorno erra em fotos de verdade; o modo
+        manual existe justamente para não depender dela)."""
+        folder = tmp_path / "grid"
+        make_grid_photo(folder, "sheet.jpg", GRID_READINGS)
+
+        report = scan(
+            catalog,
+            settings,
+            folder,
+            provider_name="fake-sequential",
+            workers=1,
+            grid_size=(2, 2),
+        )
+
+        assert report.total_images == 1
+        assert len(report.events) == 4
+        assert sorted(event.crop_index for event in report.events) == [0, 1, 2, 3]
+        assert all(event.crop_count == 4 for event in report.events)
+        assert report.auto_added == 3  # tudo, menos o garbage
+        assert report.pending == 1
+        assert report.failed == 0

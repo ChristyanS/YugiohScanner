@@ -63,10 +63,15 @@ class TestWorker:
         set_provider(provider, settings)
 
         outcome = process_task(tasks_for(cards_folder)[0])
-        assert outcome.status == "ok"
-        assert outcome.ocr is not None
-        assert outcome.ocr.best("name") == "BLUE-EYES WHITE DRAGON"
-        assert outcome.ocr.best("code") == "LOB-001"
+        assert outcome.preprocess_status is None
+        assert len(outcome.crops) == 1
+        crop = outcome.crops[0]
+        assert crop.region.index == 0
+        assert crop.region.count == 1
+        assert crop.status == "ok"
+        assert crop.ocr is not None
+        assert crop.ocr.best("name") == "BLUE-EYES WHITE DRAGON"
+        assert crop.ocr.best("code") == "LOB-001"
 
     def test_invalid_image_becomes_data_not_exception(
         self, tmp_path: Path, settings: Settings
@@ -76,29 +81,32 @@ class TestWorker:
         path = make_corrupted_image(tmp_path / "lixo.jpg")
 
         outcome = process_task(ScanTask(path=path, file_hash="x"))
-        assert outcome.status == "invalid"
-        assert outcome.error is not None
-        assert "lixo.jpg" in outcome.error, "o erro precisa dizer QUAL imagem falhou"
+        assert outcome.preprocess_status == "invalid"
+        assert outcome.preprocess_error is not None
+        assert "lixo.jpg" in outcome.preprocess_error, "o erro precisa dizer QUAL imagem falhou"
+        assert outcome.crops == []
 
     def test_truncated_image(self, tmp_path: Path, settings: Settings) -> None:
         set_provider(FakeOCRProvider(), settings)
         outcome = process_task(
             ScanTask(path=make_truncated_jpeg(tmp_path / "meio.jpg"), file_hash="x")
         )
-        assert outcome.status == "invalid"
+        assert outcome.preprocess_status == "invalid"
 
     def test_ocr_exception_is_captured(self, cards_folder: Path, settings: Settings) -> None:
         set_provider(FakeOCRProvider(fail_on={"IMG_001.jpg"}), settings)
         outcome = process_task(tasks_for(cards_folder)[0])
-        assert outcome.status == "error"
-        assert "Falha simulada" in (outcome.error or "")
+        crop = outcome.crops[0]
+        assert crop.status == "error"
+        assert "Falha simulada" in (crop.error or "")
 
     def test_empty_ocr_is_its_own_status(self, cards_folder: Path, settings: Settings) -> None:
         """Sem texto ≠ erro: a imagem foi lida, só não rendeu nada."""
         set_provider(FakeOCRProvider(default={}), settings)
         outcome = process_task(tasks_for(cards_folder)[0])
-        assert outcome.status == "ocr_empty"
-        assert outcome.error is None
+        crop = outcome.crops[0]
+        assert crop.status == "ocr_empty"
+        assert crop.error is None
 
     def test_records_timing(self, cards_folder: Path, settings: Settings) -> None:
         set_provider(FakeOCRProvider(default={"name": "X"}), settings)
@@ -137,9 +145,9 @@ class TestExecutors:
 
         by_name = {outcome.path.name: outcome for outcome in outcomes}
         assert len(outcomes) == 3
-        assert by_name["IMG_002.jpg"].status == "error"
-        assert by_name["IMG_001.jpg"].status == "ok"
-        assert by_name["IMG_003.jpg"].status == "ok"
+        assert by_name["IMG_002.jpg"].crops[0].status == "error"
+        assert by_name["IMG_001.jpg"].crops[0].status == "ok"
+        assert by_name["IMG_003.jpg"].crops[0].status == "ok"
 
     def test_empty_task_list(self, settings: Settings) -> None:
         provider = FakeOCRProvider()

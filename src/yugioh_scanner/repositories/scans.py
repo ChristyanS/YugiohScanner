@@ -18,6 +18,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..db.tables import ScanImage, ScanJob, ScanResult, utcnow
+from ..images.preprocess import BoundingBox
 
 
 class ScanRepository:
@@ -168,17 +169,23 @@ class ScanRepository:
 
     # ------------------------------------------------------------------ resultado
 
-    def has_applied_result(self, scan_image_id: int) -> bool:
-        """Esta foto já contribuiu para a coleção em alguma execução anterior?
+    def has_applied_result(self, scan_image_id: int, *, crop_index: int = 0) -> bool:
+        """Este recorte já contribuiu para a coleção em alguma execução anterior?
 
         É a guarda que faz `--reprocess` nunca duplicar quantidade: mesmo que a
         nova leitura dê `AUTO`, não aplicamos de novo se uma leitura anterior já
         aplicou (plano §13.2 — "uma `scan_image` contribui no máximo uma vez").
+
+        Filtrado por `crop_index` porque, numa foto com grade (plano §22), cada
+        recorte é uma carta diferente e aplica independentemente — sem o
+        filtro, uma foto de 4 cartas com o recorte #0 já aplicado faria os
+        recortes #1-#3 serem recusados por engano num `--reprocess`.
         """
         return (
             self.session.scalars(
                 select(ScanResult.id).where(
                     ScanResult.scan_image_id == scan_image_id,
+                    ScanResult.crop_index == crop_index,
                     ScanResult.applied.is_(True),
                 )
             ).first()
@@ -200,6 +207,9 @@ class ScanRepository:
         candidates: list[dict] | None,
         decision: str,
         detected_language: str | None = None,
+        crop_index: int = 0,
+        crop_count: int = 1,
+        source_bbox: BoundingBox | None = None,
     ) -> ScanResult:
         result = ScanResult(
             scan_image_id=scan_image_id,
@@ -214,6 +224,12 @@ class ScanRepository:
             candidates=candidates,
             decision=decision,
             detected_language=detected_language,
+            crop_index=crop_index,
+            crop_count=crop_count,
+            source_bbox_left=source_bbox.left if source_bbox is not None else None,
+            source_bbox_top=source_bbox.top if source_bbox is not None else None,
+            source_bbox_right=source_bbox.right if source_bbox is not None else None,
+            source_bbox_bottom=source_bbox.bottom if source_bbox is not None else None,
         )
         self.session.add(result)
         self.session.flush()

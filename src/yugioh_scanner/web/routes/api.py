@@ -13,9 +13,12 @@ from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 
+from ...capture.registry import create_backend
+from ...config import Settings
 from ...db.tables import Card
-from ...errors import TooManyUploadFilesError, UploadTooLargeError
+from ...errors import InvalidScanPathError, TooManyUploadFilesError, UploadTooLargeError
 from ...images import ImageError, has_supported_extension, load_image, looks_like_image
+from ...images.grid import parse_grid_size
 from ...scanner.discovery import resolve_scan_folder
 from ...services.sync_service import SyncService
 from ..deps import (
@@ -131,6 +134,11 @@ class ScanStartBody(BaseModel):
     recursive: bool = False
     auto: bool = True
     reprocess: bool = False
+    grid: bool = False
+    #: "3x3" — layout explícito, alternativa à detecção automática por
+    #: contorno (que não é confiável em fotos reais, ADR 0011). Informar isto
+    #: já liga o modo grade sozinho, não precisa marcar `grid` também.
+    grid_size: str | None = None
 
 
 @router.post("/scans")
@@ -143,6 +151,7 @@ async def start_scan(
     # Validado aqui (não só dentro da thread) para que um caminho ruim vire
     # erro HTTP imediato, em vez de aparecer só no primeiro evento do SSE.
     resolve_scan_folder(body.folder, settings)
+    grid_size = parse_grid_size(body.grid_size) if body.grid_size else None
 
     loop = asyncio.get_running_loop()
     run = runner.start(
@@ -155,6 +164,8 @@ async def start_scan(
         recursive=body.recursive,
         no_auto=not body.auto,
         reprocess=body.reprocess,
+        grid=body.grid,
+        grid_size=grid_size,
     )
     return {"run_id": run.run_id, "status": "started"}
 
@@ -376,6 +387,62 @@ def export_collection(
         media_type="text/csv" if format == "csv" else "text/plain",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+# ------------------------------------------------------------------ captura
+
+
+@router.get("/capture/devices")
+def list_capture_devices() -> list[dict[str, Any]]:
+    """Dispositivos WIA disponíveis (plano §22, ADR 0011).
+
+    Pode levantar `CaptureError` (não é Windows, `pywin32` ausente, nenhum
+    dispositivo instalado) — o handler global já converte isso em JSON com
+    `hint`, mesmo mecanismo de qualquer outro `YugiohScannerError` da API.
+    """
+    backend = create_backend("wia")
+    return [{"id": device.id, "name": device.name} for device in backend.list_devices()]
+
+
+class CaptureStartBody(BaseModel):
+    device_id: str | None = None
+    dpi: int = 300
+    color: bool = True
+    #: Pasta devolvida por uma chamada anterior desta mesma sequência de
+    #: páginas — omitido, começa uma pasta nova. Existe porque capturar em
+    #: lote (várias páginas numa chamada só) não dá tempo real de trocar a
+    #: folha na mesa do scanner entre uma captura e outra (achado real de
+    #: uso, plano §22): agora é uma página por chamada, e o cliente reenvia
+    #: o `folder` da resposta anterior para acumular todas no mesmo lugar.
+    folder: str | None = None
+
+
+def _resolve_capture_folder(raw: str | None, settings: Settings) -> Path:
+    if raw is None:
+        return settings.uploads_path / "captures" / uuid.uuid4().hex
+    base = (settings.uploads_path / "captures").resolve()
+    candidate = Path(raw).resolve()
+    if candidate != base and base not in candidate.parents:
+        raise InvalidScanPathError(f"Pasta de captura inválida: {raw!r}.")
+    return candidate
+
+
+@router.post("/capture")
+def start_capture(body: CaptureStartBody, settings: SettingsDep) -> dict[str, Any]:
+    """Captura **uma** página por chamada — mesmo formato de resposta de
+    `POST /uploads` ({folder, ...}), para o JS de `/scan` reusar o mesmo
+    fluxo "pega folder, preenche o campo, o form dispara o scan". O cliente
+    chama este endpoint uma vez por página física, dando tempo real de
+    trocar a folha entre uma chamada e outra."""
+    backend = create_backend("wia")
+    capture_dir = _resolve_capture_folder(body.folder, settings)
+    backend.capture(
+        capture_dir,
+        device_id=body.device_id,
+        dpi=body.dpi,
+        color_mode="color" if body.color else "gray",
+    )
+    return {"folder": str(capture_dir)}
 
 
 # ------------------------------------------------------------------ uploads

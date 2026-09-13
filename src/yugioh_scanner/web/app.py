@@ -22,6 +22,7 @@ from ..db.engine import engine_from_settings
 from ..db.session import Database
 from ..errors import (
     AmbiguousCardError,
+    CaptureError,
     InvalidScanPathError,
     PrintNotFoundForCardError,
     ScanResultAlreadyAppliedError,
@@ -30,6 +31,7 @@ from ..errors import (
     YugiohScannerError,
 )
 from ..images.cache import ImageCache
+from ..images.grid import InvalidGridSizeError
 from ..logging_setup import get_logger
 from ..ygoprodeck.client import YgoProDeckClient
 from .scan_runner import ScanRunnerRegistry
@@ -60,7 +62,14 @@ def _error_status(exc: YugiohScannerError) -> int:
         exc, AmbiguousCardError | PrintNotFoundForCardError | ScanResultAlreadyAppliedError
     ):
         return 409
-    if isinstance(exc, InvalidScanPathError | UnknownExportProfileError | UploadError):
+    if isinstance(
+        exc,
+        InvalidScanPathError
+        | UnknownExportProfileError
+        | UploadError
+        | CaptureError
+        | InvalidGridSizeError,
+    ):
         return 422
     return 500
 

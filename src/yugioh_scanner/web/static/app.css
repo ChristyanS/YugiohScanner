@@ -64,6 +64,47 @@
   margin-block-end: 0.5rem;
 }
 
+/* Grade de cartas (plano §22, ADR 0011): mostra só o recorte em revisão,
+   ampliado (não a foto inteira com um destaque pequeno — a carta ficava
+   difícil de comparar com os candidatos, achado real do usuário), e
+   agrupamento visual de linhas da mesma foto na tabela de detalhe do scan. */
+.photo-wrap {
+  position: relative;
+  display: inline-block;
+  max-width: 100%;
+}
+
+.photo-wrap img.roi {
+  display: block;
+}
+
+/* Quando há um recorte (crop_count > 1): o contêiner vira uma "janela" de
+   proporção de carta, e a `<img>` é ampliada + deslocada via JS
+   (`updateCropOverlay`) para que só a célula da grade apareça, preenchendo
+   o quadro. */
+.photo-wrap.cropped {
+  width: 100%;
+  aspect-ratio: 59 / 86;
+  overflow: hidden;
+  border: 1px solid var(--pico-muted-border-color);
+}
+
+.photo-wrap.cropped img.roi {
+  position: absolute;
+  max-width: none;
+  border: none;
+  margin-block-end: 0;
+}
+
+.crop-label {
+  font-weight: 600;
+  color: var(--pico-primary);
+}
+
+.group-start td {
+  border-top: 2px solid var(--pico-primary);
+}
+
 .candidate-list {
   list-style: none;
   padding: 0;

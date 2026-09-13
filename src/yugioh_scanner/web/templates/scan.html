@@ -22,7 +22,16 @@
     <label><input type="checkbox" name="recursive"> Incluir subpastas</label>
     <label><input type="checkbox" name="auto" checked> Adicionar automaticamente (confiança alta)</label>
     <label><input type="checkbox" name="reprocess"> Reprocessar imagens já vistas</label>
+    <label><input type="checkbox" name="grid"> Detectar várias cartas por foto (grade)</label>
   </div>
+  <label>Layout da grade (opcional)
+    <input type="text" name="grid_size" id="grid-size-input" placeholder="ex.: 3x3">
+  </label>
+  <p class="kbd-hint">
+    Se souber o layout exato (linhas x colunas), informe aqui — mais confiável
+    que a detecção automática, que erra fácil com arte de carta de verdade.
+    Preencher já liga o modo grade sozinho.
+  </p>
   <button type="submit">Iniciar scan</button>
 </form>
 
@@ -36,6 +45,27 @@
   </label>
 </div>
 
+<section id="capture-section" hidden>
+  <hr>
+  <h2>Ou capture do scanner</h2>
+  <div class="grid">
+    <label>Dispositivo
+      <select id="device-select"></select>
+    </label>
+    <label>DPI
+      <input type="number" id="capture-dpi" value="300" min="75" max="1200">
+    </label>
+  </div>
+  <label><input type="checkbox" id="capture-color" checked> Cor (desmarcado: tons de cinza)</label>
+  <p class="kbd-hint">
+    Uma página por clique — a mesa do scanner não tem alimentador automático,
+    então cada captura para e espera você trocar a folha antes da próxima.
+  </p>
+  <button type="button" id="capture-button" class="secondary">Capturar página</button>
+  <button type="button" id="capture-reset-button" class="outline" hidden>Começar nova captura</button>
+  <p id="capture-status" class="kbd-hint"></p>
+</section>
+
 <section id="progress-section" hidden>
   <h2>Progresso</h2>
   <progress id="progress-bar" value="0" max="100"></progress>
@@ -48,6 +78,13 @@ const form = document.getElementById("scan-form");
 const folderInput = document.getElementById("folder-input");
 const dropZone = document.getElementById("upload-drop");
 const fileInput = document.getElementById("file-input");
+const captureSection = document.getElementById("capture-section");
+const deviceSelect = document.getElementById("device-select");
+const captureDpi = document.getElementById("capture-dpi");
+const captureColor = document.getElementById("capture-color");
+const captureButton = document.getElementById("capture-button");
+const captureResetButton = document.getElementById("capture-reset-button");
+const captureStatus = document.getElementById("capture-status");
 const progressSection = document.getElementById("progress-section");
 const progressBar = document.getElementById("progress-bar");
 const progressCounts = document.getElementById("progress-counts");
@@ -85,6 +122,73 @@ dropZone.addEventListener("drop", (e) => {
 });
 fileInput.addEventListener("change", () => uploadFiles(fileInput.files));
 
+// Seção de captura só aparece se houver mesmo um backend de scanner
+// disponível (Windows + pywin32 + ao menos um dispositivo) — em qualquer
+// outro ambiente, a ausência é silenciosa: não é uma falha do usuário.
+async function loadCaptureDevices() {
+  try {
+    const res = await fetch("/api/v1/capture/devices");
+    if (!res.ok) return;
+    const devices = await res.json();
+    if (!devices.length) return;
+    deviceSelect.innerHTML = devices.map((d) => `<option value="${d.id}">${d.name}</option>`).join("");
+    captureSection.hidden = false;
+  } catch (err) {
+    // Sem rede/servidor indisponível para este endpoint específico — a
+    // seção fica oculta, igual a "sem scanner".
+  }
+}
+loadCaptureDevices();
+
+// Uma página por clique, de propósito (achado real de uso, plano §22):
+// capturar um lote inteiro numa chamada só não dava tempo de trocar a folha
+// na mesa do scanner entre uma captura e outra — a segunda disparava antes
+// da pessoa conseguir posicionar a próxima. `captureFolder` acumula as
+// páginas desta sequência; reenviado em cada chamada para elas caírem na
+// mesma pasta.
+let captureFolder = null;
+let capturedPages = 0;
+
+captureButton.addEventListener("click", async () => {
+  captureButton.disabled = true;
+  captureStatus.textContent = "Capturando...";
+  try {
+    const res = await fetch("/api/v1/capture", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        device_id: deviceSelect.value || null,
+        dpi: parseInt(captureDpi.value, 10) || 300,
+        color: captureColor.checked,
+        folder: captureFolder,
+      }),
+    });
+    const body = await res.json();
+    if (!res.ok) { showError(body.error || "Falha na captura", body.hint); captureStatus.textContent = ""; return; }
+    captureFolder = body.folder;
+    capturedPages++;
+    folderInput.value = captureFolder;
+    // Captura de scanner tende a trazer várias cartas na mesma página —
+    // mesmo default do comando `scan-device` na CLI (ADR 0011).
+    form.grid.checked = true;
+    captureResetButton.hidden = false;
+    captureStatus.textContent = `${capturedPages} página(s) capturada(s). Troque a folha e clique em ` +
+      `"Capturar página" de novo, ou inicie o scan quando terminar.`;
+    clearError();
+  } catch (err) {
+    captureStatus.textContent = "Falha na captura.";
+  } finally {
+    captureButton.disabled = false;
+  }
+});
+
+captureResetButton.addEventListener("click", () => {
+  captureFolder = null;
+  capturedPages = 0;
+  captureResetButton.hidden = true;
+  captureStatus.textContent = "Pronto para uma nova sequência de captura.";
+});
+
 function logLine(text) {
   const line = document.createElement("div");
   line.textContent = text;
@@ -101,6 +205,8 @@ form.addEventListener("submit", async (e) => {
     recursive: form.recursive.checked,
     auto: form.auto.checked,
     reprocess: form.reprocess.checked,
+    grid: form.grid.checked,
+    grid_size: form.grid_size.value.trim() || null,
   };
   const res = await fetch("/api/v1/scans", {
     method: "POST",
@@ -120,13 +226,16 @@ form.addEventListener("submit", async (e) => {
 
   source.addEventListener("image", (ev) => {
     const data = JSON.parse(ev.data);
-    if (data.skipped) { skipped++; logLine(`${data.file}: já processada, pulada`); }
+    // Uma foto com grade (--grid) rende um evento por carta detectada, todos
+    // com o mesmo `file` — o sufixo distingue as linhas no log.
+    const label = data.crop_count > 1 ? `${data.file} [${data.crop_index + 1}/${data.crop_count}]` : data.file;
+    if (data.skipped) { skipped++; logLine(`${label}: já processada, pulada`); }
     else {
       processed++;
       if (data.decision === "auto" && data.applied) autoAdded++;
       else if (data.status !== "ok") failed++;
       else pending++;
-      logLine(`${data.file}: ${data.name || data.ocr_name || "?"} [${data.decision || data.status}]`);
+      logLine(`${label}: ${data.name || data.ocr_name || "?"} [${data.decision || data.status}]`);
     }
     progressCounts.textContent = `processadas: ${processed} · auto: ${autoAdded} · pendentes: ${pending} · falhas: ${failed} · puladas: ${skipped}`;
   });

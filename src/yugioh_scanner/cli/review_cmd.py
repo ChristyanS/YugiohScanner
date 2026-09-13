@@ -49,8 +49,18 @@ def _candidates_of(result: ScanResult) -> list[dict[str, Any]]:
     return list(result.candidates or [])
 
 
+def _label(result: ScanResult) -> str:
+    """Nome do arquivo, com `[i/N]` quando a foto rendeu mais de um recorte
+    (grade de cartas, plano §22) — senão duas pendências da mesma foto
+    apareceriam idênticas na fila, sem como saber qual carta é qual."""
+    path = result.scan_image.file_path
+    if result.crop_count > 1:
+        return f"{path} [{result.crop_index + 1}/{result.crop_count}]"
+    return path
+
+
 def _render_result(result: ScanResult) -> None:
-    console.print(f"\n[bold]{result.scan_image.file_path}[/bold]")
+    console.print(f"\n[bold]{_label(result)}[/bold]")
     console.print(f"  OCR nome: [dim]{result.ocr_name_raw or '(vazio)'}[/dim]")
     console.print(f"  OCR set:  [dim]{result.ocr_code_raw or '(vazio)'}[/dim]")
     console.print(
@@ -144,6 +154,8 @@ def review_command(
                     {
                         "result_id": result.id,
                         "file": result.scan_image.file_path,
+                        "crop_index": result.crop_index,
+                        "crop_count": result.crop_count,
                         "ocr_name": result.ocr_name_raw,
                         "ocr_code": result.ocr_code_raw,
                         "decision": result.decision,

@@ -84,6 +84,8 @@ class ScanRunnerRegistry:
         recursive: bool,
         no_auto: bool,
         reprocess: bool,
+        grid: bool = False,
+        grid_size: tuple[int, int] | None = None,
     ) -> ScanRun:
         run = ScanRun(run_id=uuid.uuid4().hex, queue=asyncio.Queue())
         with self._lock:
@@ -108,6 +110,8 @@ class ScanRunnerRegistry:
                     apply=True,
                     no_auto=no_auto,
                     reprocess=reprocess,
+                    grid=grid,
+                    grid_size=grid_size,
                     progress=on_event,
                 )
                 run.report = report

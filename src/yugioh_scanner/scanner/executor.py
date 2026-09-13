@@ -69,13 +69,19 @@ class SerialScanExecutor:
         settings: Settings,
         *,
         should_stop: StopCheck | None = None,
+        grid_mode: bool = False,
+        grid_size: tuple[int, int] | None = None,
     ) -> None:
         self._provider = provider
         self._settings = settings
         self._should_stop = should_stop
+        self._grid_mode = grid_mode
+        self._grid_size = grid_size
 
     def map(self, tasks: Sequence[ScanTask]) -> Iterator[ScanOutcome]:
-        set_provider(self._provider, self._settings)
+        set_provider(
+            self._provider, self._settings, grid_mode=self._grid_mode, grid_size=self._grid_size
+        )
         self._provider.warmup()
         for task in tasks:
             if self._should_stop is not None and self._should_stop():
@@ -99,9 +105,13 @@ class PoolScanExecutor:
         workers: int,
         *,
         should_stop: StopCheck | None = None,
+        grid_mode: bool = False,
+        grid_size: tuple[int, int] | None = None,
     ) -> None:
         self.workers = max(1, workers)
         self._should_stop = should_stop
+        self._grid_mode = grid_mode
+        self._grid_size = grid_size
         self._executor: Executor | None = None
 
     def _create_executor(self) -> Executor:  # pragma: no cover - abstrato
@@ -166,8 +176,10 @@ class ProcessPoolScanExecutor(PoolScanExecutor):
         workers: int,
         *,
         should_stop: StopCheck | None = None,
+        grid_mode: bool = False,
+        grid_size: tuple[int, int] | None = None,
     ) -> None:
-        super().__init__(workers, should_stop=should_stop)
+        super().__init__(workers, should_stop=should_stop, grid_mode=grid_mode, grid_size=grid_size)
         self._provider_name = provider_name
         # Cada worker fica com uma thread: o paralelismo vem dos processos.
         # Sem isso os workers disputam os mesmos núcleos e o scan em paralelo
@@ -186,7 +198,7 @@ class ProcessPoolScanExecutor(PoolScanExecutor):
         return ProcessPoolExecutor(
             max_workers=self.workers,
             initializer=_process_initializer,
-            initargs=(self._provider_name, self._settings),
+            initargs=(self._provider_name, self._settings, self._grid_mode, self._grid_size),
         )
 
 
@@ -200,15 +212,19 @@ class ThreadPoolScanExecutor(PoolScanExecutor):
         workers: int,
         *,
         should_stop: StopCheck | None = None,
+        grid_mode: bool = False,
+        grid_size: tuple[int, int] | None = None,
     ) -> None:
-        super().__init__(workers, should_stop=should_stop)
+        super().__init__(workers, should_stop=should_stop, grid_mode=grid_mode, grid_size=grid_size)
         self._provider = provider
         self._settings = settings
 
     def _create_executor(self) -> Executor:
         # Threads compartilham o processo, então basta um provider — e ele
         # precisa ser thread-safe, o que providers de rede naturalmente são.
-        set_provider(self._provider, self._settings)
+        set_provider(
+            self._provider, self._settings, grid_mode=self._grid_mode, grid_size=self._grid_size
+        )
         self._provider.warmup()
         log.info(
             "scan.pool_started",
@@ -223,12 +239,17 @@ class ThreadPoolScanExecutor(PoolScanExecutor):
         self._provider.close()
 
 
-def _process_initializer(provider_name: str, settings: Settings) -> None:
+def _process_initializer(
+    provider_name: str,
+    settings: Settings,
+    grid_mode: bool = False,
+    grid_size: tuple[int, int] | None = None,
+) -> None:
     """Roda uma vez em cada subprocesso, antes da primeira tarefa."""
     # Complementa o `intra_op_num_threads` do provider: se alguma dependência
     # usar OpenMP (numpy, BLAS), ela também fica com uma thread só.
     os.environ.setdefault("OMP_NUM_THREADS", "1")
-    init_worker(provider_name, settings)
+    init_worker(provider_name, settings, grid_mode=grid_mode, grid_size=grid_size)
 
 
 def resolve_workers(settings: Settings, requested: int | None = None) -> int:
@@ -245,6 +266,8 @@ def create_executor(
     workers: int | None = None,
     should_stop: StopCheck | None = None,
     provider: OCRProvider | None = None,
+    grid_mode: bool = False,
+    grid_size: tuple[int, int] | None = None,
 ) -> ScanExecutor:
     """Escolhe a estratégia certa a partir do tipo de carga do provider.
 
@@ -259,19 +282,42 @@ def create_executor(
     probe = provider or create_provider(name, settings)
 
     if resolved_workers == 1:
-        return SerialScanExecutor(probe, settings, should_stop=should_stop)
+        return SerialScanExecutor(
+            probe, settings, should_stop=should_stop, grid_mode=grid_mode, grid_size=grid_size
+        )
 
     if probe.is_io_bound:
-        return ThreadPoolScanExecutor(probe, settings, resolved_workers, should_stop=should_stop)
+        return ThreadPoolScanExecutor(
+            probe,
+            settings,
+            resolved_workers,
+            should_stop=should_stop,
+            grid_mode=grid_mode,
+            grid_size=grid_size,
+        )
 
     if provider is not None:
         # Um provider injetado (testes, fake) não sobrevive ao `spawn`: o
         # subprocesso não teria como recriá-lo. Rodar em threads mantém o
         # comportamento observável sem mentir sobre o paralelismo.
-        return ThreadPoolScanExecutor(probe, settings, resolved_workers, should_stop=should_stop)
+        return ThreadPoolScanExecutor(
+            probe,
+            settings,
+            resolved_workers,
+            should_stop=should_stop,
+            grid_mode=grid_mode,
+            grid_size=grid_size,
+        )
 
     probe.close()
-    return ProcessPoolScanExecutor(name, settings, resolved_workers, should_stop=should_stop)
+    return ProcessPoolScanExecutor(
+        name,
+        settings,
+        resolved_workers,
+        should_stop=should_stop,
+        grid_mode=grid_mode,
+        grid_size=grid_size,
+    )
 
 
 def run_tasks(

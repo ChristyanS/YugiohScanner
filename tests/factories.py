@@ -13,6 +13,8 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
 
+from yugioh_scanner.images.preprocess import BoundingBox
+
 #: Proporção real de uma carta (59 mm × 86 mm).
 CARD_ASPECT = 59 / 86
 
@@ -118,6 +120,63 @@ def make_truncated_jpeg(path: Path) -> Path:
     buffer.unlink()
     path.write_bytes(data[: len(data) // 3])
     return path
+
+
+def make_grid_photo(
+    folder: Path, filename: str, readings: list[dict[str, str]]
+) -> tuple[Path, list[BoundingBox]]:
+    """Compõe N cartas sintéticas numa única foto, em duas colunas (plano §22).
+
+    A foto não precisa "parecer" uma grade de verdade para quem testa a
+    detecção de contornos de verdade: os testes de pipeline (grid=True)
+    fakeiam `detect_grid_cells` para devolver as caixas conhecidas por esta
+    função, em vez de detectar de verdade — a suíte rápida não pode depender
+    do extra `cv` estar instalado (ADR 0011). Devolve o caminho da foto e as
+    caixas normalizadas (0..1) de cada célula, na ordem de `readings`.
+    """
+    folder.mkdir(parents=True, exist_ok=True)
+    tiles = []
+    for i, reading in enumerate(readings):
+        tile_path = folder / f"_tile_{i}.jpg"
+        make_card_image(
+            tile_path,
+            name=reading.get("name", "X"),
+            set_code=reading.get("code") or "LOB-001",
+            height=300,
+        )
+        tiles.append(Image.open(tile_path))
+
+    cols = 2
+    cell_w = max(tile.width for tile in tiles)
+    cell_h = max(tile.height for tile in tiles)
+    gutter = 20
+    rows = (len(tiles) + cols - 1) // cols
+    canvas_w = cols * cell_w + (cols + 1) * gutter
+    canvas_h = rows * cell_h + (rows + 1) * gutter
+    canvas = Image.new("RGB", (canvas_w, canvas_h), (10, 10, 10))
+
+    boxes: list[BoundingBox] = []
+    for i, tile in enumerate(tiles):
+        row, col = divmod(i, cols)
+        x = gutter + col * (cell_w + gutter)
+        y = gutter + row * (cell_h + gutter)
+        canvas.paste(tile, (x, y))
+        boxes.append(
+            BoundingBox(
+                x / canvas_w,
+                y / canvas_h,
+                (x + tile.width) / canvas_w,
+                (y + tile.height) / canvas_h,
+            )
+        )
+        tile.close()
+
+    dest = folder / filename
+    canvas.save(dest, quality=95)
+    canvas.close()
+    for i in range(len(readings)):
+        (folder / f"_tile_{i}.jpg").unlink()
+    return dest, boxes
 
 
 def make_folder_with_cards(folder: Path, cards: dict[str, tuple[str, str]]) -> Path:

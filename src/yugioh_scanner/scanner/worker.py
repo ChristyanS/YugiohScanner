@@ -19,9 +19,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from PIL import Image
+
 from ..config import Settings
 from ..errors import YugiohScannerError
-from ..images.preprocess import ImageError, PreparedImage, prepare_image
+from ..images.grid import detect_grid_cells, manual_grid_cells
+from ..images.preprocess import BoundingBox, ImageError, PreparedImage, load_image, prepare_regions
 from ..ocr.base import (
     REGION_CODE,
     REGION_FULL,
@@ -36,6 +39,12 @@ from ..ocr.registry import create_provider
 #: imagens que aquele worker processar.
 _PROVIDER: OCRProvider | None = None
 _SETTINGS: Settings | None = None
+#: Liga a detecção de grade (`--grid`). Default `False` preserva o caminho de
+#: hoje: sem isto, `images/grid.py` (e portanto `cv2`) nunca é importado.
+_GRID_MODE: bool = False
+#: Quando informado (`--grid-size`), o layout é explícito (linhas, colunas) —
+#: pula a detecção automática por contorno de vez, sem precisar de `cv2`.
+_GRID_SIZE: tuple[int, int] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,20 +60,30 @@ class ScanTask:
     size: int = 0
 
 
-@dataclass
-class ScanOutcome:
-    """O que volta do worker. Cruza a fronteira de processos, então é puro."""
+@dataclass(frozen=True, slots=True)
+class CropRegion:
+    """Uma célula de uma grade de cartas dentro da foto de origem.
 
-    task: ScanTask
+    `count == 1` e `bbox is None` é o caso de hoje (uma foto = uma carta) —
+    inclusive quando `--grid` está ligado mas a foto não rendeu uma grade
+    confiável (`detect_grid_cells` devolveu `[]`).
+    """
+
+    index: int
+    count: int
+    bbox: BoundingBox | None
+
+
+@dataclass
+class CropOutcome:
+    """O que o OCR concluiu sobre um recorte (uma célula da grade, ou a foto
+    inteira quando não há grade)."""
+
+    region: CropRegion
     status: str = "ok"
     ocr: OCRResult | None = None
     error: str | None = None
-    elapsed_ms: int = 0
     notes: dict[str, Any] = field(default_factory=dict)
-
-    @property
-    def path(self) -> Path:
-        return self.task.path
 
     @property
     def failed(self) -> bool:
@@ -92,10 +111,42 @@ class ScanOutcome:
         return self.ocr.best(REGION_CODE)
 
 
-def init_worker(provider_name: str, settings: Settings) -> None:
+@dataclass
+class ScanOutcome:
+    """O que volta do worker. Cruza a fronteira de processos, então é puro.
+
+    Uma foto pode render vários recortes (`crops`) — uma grade de cartas
+    (plano §22) vira N leituras de OCR independentes, cada uma com sua
+    própria decisão de matching rio abaixo. `crops` tem exatamente um item
+    (`CropRegion(0, 1, None)`) sempre que `--grid` está desligado ou a foto
+    não rendeu uma grade confiável — o caminho de hoje, byte a byte.
+    """
+
+    task: ScanTask
+    crops: list[CropOutcome] = field(default_factory=list)
+    elapsed_ms: int = 0
+    #: Preenchidos só quando a foto inteira falhou antes de qualquer recorte
+    #: (arquivo corrompido, formato inválido) — `crops` fica vazio nesse caso.
+    preprocess_status: str | None = None
+    preprocess_error: str | None = None
+
+    @property
+    def path(self) -> Path:
+        return self.task.path
+
+
+def init_worker(
+    provider_name: str,
+    settings: Settings,
+    *,
+    grid_mode: bool = False,
+    grid_size: tuple[int, int] | None = None,
+) -> None:
     """Inicializador do pool: cria e aquece o provider uma única vez."""
-    global _PROVIDER, _SETTINGS
+    global _PROVIDER, _SETTINGS, _GRID_MODE, _GRID_SIZE
     _SETTINGS = settings
+    _GRID_MODE = grid_mode
+    _GRID_SIZE = grid_size
     _PROVIDER = create_provider(provider_name, settings)
     _PROVIDER.warmup()
 
@@ -112,19 +163,29 @@ def get_provider() -> OCRProvider:
     return _PROVIDER
 
 
-def set_provider(provider: OCRProvider, settings: Settings) -> None:
+def set_provider(
+    provider: OCRProvider,
+    settings: Settings,
+    *,
+    grid_mode: bool = False,
+    grid_size: tuple[int, int] | None = None,
+) -> None:
     """Injeta o provider no processo atual (execução serial e testes)."""
-    global _PROVIDER, _SETTINGS
+    global _PROVIDER, _SETTINGS, _GRID_MODE, _GRID_SIZE
     _PROVIDER = provider
     _SETTINGS = settings
+    _GRID_MODE = grid_mode
+    _GRID_SIZE = grid_size
 
 
 def reset_provider() -> None:
-    global _PROVIDER, _SETTINGS
+    global _PROVIDER, _SETTINGS, _GRID_MODE, _GRID_SIZE
     if _PROVIDER is not None:
         _PROVIDER.close()
     _PROVIDER = None
     _SETTINGS = None
+    _GRID_MODE = False
+    _GRID_SIZE = None
 
 
 def _read_with_fallback(provider: OCRProvider, prepared: PreparedImage, source: str) -> OCRResult:
@@ -158,58 +219,91 @@ def _read_with_fallback(provider: OCRProvider, prepared: PreparedImage, source: 
 
 
 def process_task(task: ScanTask) -> ScanOutcome:
-    """Pré-processa e roda OCR em uma imagem. Nunca levanta exceção."""
+    """Pré-processa e roda OCR em uma imagem. Nunca levanta exceção.
+
+    Com `_GRID_MODE` ligado, tenta primeiro achar uma grade de cartas na foto
+    (`detect_grid_cells`); se achar, cada célula vira um `CropOutcome`
+    independente. Sem grade detectada (ou com `_GRID_MODE` desligado), o
+    resultado é uma lista de um único recorte — a foto inteira, exatamente
+    como antes desta função existir.
+    """
     started = time.perf_counter()
     provider = get_provider()
     settings = _SETTINGS
+    max_pixels = settings.max_image_pixels if settings else 40_000_000
 
     try:
-        prepared = prepare_image(
-            task.path,
-            max_pixels=settings.max_image_pixels if settings else 40_000_000,
-        )
+        image = load_image(task.path, max_pixels=max_pixels)
     except ImageError as exc:
         return ScanOutcome(
             task=task,
-            status="invalid",
-            error=exc.user_message,
+            preprocess_status="invalid",
+            preprocess_error=exc.user_message,
             elapsed_ms=int((time.perf_counter() - started) * 1000),
         )
     except Exception as exc:  # pragma: no cover - defensivo
         return ScanOutcome(
             task=task,
-            status="error",
-            error=f"Falha inesperada ao preparar a imagem: {exc}",
+            preprocess_status="error",
+            preprocess_error=f"Falha inesperada ao preparar a imagem: {exc}",
             elapsed_ms=int((time.perf_counter() - started) * 1000),
         )
 
     try:
+        boxes: list[BoundingBox] = []
+        if _GRID_MODE:
+            # `_GRID_SIZE` (--grid-size) pula a detecção automática por
+            # contorno de vez — a pessoa já sabe o layout, e a detecção por
+            # contorno não é confiável em fotos reais (achado real: 2 de 9
+            # cartas numa digitalização de grade 3x3, plano §22/ADR 0011).
+            boxes = (
+                manual_grid_cells(image, *_GRID_SIZE)
+                if _GRID_SIZE is not None
+                else detect_grid_cells(image)
+            )
+        regions: list[BoundingBox | None] = list(boxes) if len(boxes) >= 2 else [None]
+        crops = [
+            _process_one_crop(provider, image, task, CropRegion(idx, len(regions), box))
+            for idx, box in enumerate(regions)
+        ]
+    finally:
+        image.close()
+
+    elapsed_ms = int((time.perf_counter() - started) * 1000)
+    return ScanOutcome(task=task, crops=crops, elapsed_ms=elapsed_ms)
+
+
+def _process_one_crop(
+    provider: OCRProvider, image: Image.Image, task: ScanTask, region: CropRegion
+) -> CropOutcome:
+    """O corpo de sempre (ROIs + OCR) aplicado a um recorte da foto já carregada."""
+    try:
+        prepared = prepare_regions(image, source=task.path, region=region.bbox)
+    except ImageError as exc:
+        return CropOutcome(region=region, status="invalid", error=exc.user_message)
+    except Exception as exc:  # pragma: no cover - defensivo
+        return CropOutcome(region=region, status="error", error=f"{type(exc).__name__}: {exc}")
+
+    try:
         result = _read_with_fallback(provider, prepared, str(task.path))
     except YugiohScannerError as exc:
-        return ScanOutcome(
-            task=task,
-            status="error",
-            error=exc.user_message,
-            elapsed_ms=int((time.perf_counter() - started) * 1000),
-            notes=prepared.notes,
+        return CropOutcome(
+            region=region, status="error", error=exc.user_message, notes=prepared.notes
         )
     except Exception as exc:
         # Uma imagem problemática não pode interromper as demais (§16).
-        return ScanOutcome(
-            task=task,
+        return CropOutcome(
+            region=region,
             status="error",
             error=f"{type(exc).__name__}: {exc}",
-            elapsed_ms=int((time.perf_counter() - started) * 1000),
             notes=prepared.notes,
         )
     finally:
         prepared.close()
 
-    elapsed = int((time.perf_counter() - started) * 1000)
-    return ScanOutcome(
-        task=task,
+    return CropOutcome(
+        region=region,
         status="ocr_empty" if result.is_empty else "ok",
         ocr=result,
-        elapsed_ms=elapsed,
         notes=prepared.notes,
     )

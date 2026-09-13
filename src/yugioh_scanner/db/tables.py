@@ -483,6 +483,20 @@ class ScanResult(Base):
     #: Top-5 com scores, para a tela de revisão não precisar re-rodar o matching.
     candidates: Mapped[list[Any] | None] = mapped_column(JSON)
 
+    #: Posição deste recorte dentro da foto de origem (0-based, ordem de
+    #: leitura) e quantos recortes a foto rendeu no total. `0`/`1` é o caso de
+    #: hoje (uma foto = uma carta) — grade de cartas (plano §22) vira 1—N sem
+    #: mudar o shape da tabela, só preenchendo estas colunas.
+    crop_index: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    crop_count: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    #: Retângulo normalizado (0..1) de onde este recorte veio dentro da
+    #: `ScanImage` original. NULL = a foto inteira foi o "recorte" (caminho
+    #: de hoje, crop_count=1).
+    source_bbox_left: Mapped[float | None] = mapped_column(Float)
+    source_bbox_top: Mapped[float | None] = mapped_column(Float)
+    source_bbox_right: Mapped[float | None] = mapped_column(Float)
+    source_bbox_bottom: Mapped[float | None] = mapped_column(Float)
+
     decision: Mapped[str] = mapped_column(String(16), nullable=False, default="pending")
     #: True quando esta imagem já contribuiu +1 na coleção. Garante que uma
     #: foto conte no máximo uma vez, mesmo com --reprocess (plano §13.2).

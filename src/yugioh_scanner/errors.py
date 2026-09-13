@@ -112,6 +112,22 @@ class OcrProviderUnavailableError(OcrProviderError):
         )
 
 
+class LlmApiKeyMissingError(OcrProviderError):
+    """Provider de OCR por LLM configurado, mas sem chave de API.
+
+    Distinto de `OcrProviderUnavailableError`: o pacote está instalado, só
+    falta a credencial. Quem chama (a cascata de fallback, plano §6.3)
+    trata isto como "degradar em silêncio para manual" (ADR 0004) — nunca
+    como falha do scan inteiro.
+    """
+
+    def __init__(self, provider: str) -> None:
+        super().__init__(
+            f"O provider de OCR '{provider}' precisa de uma chave de API.",
+            hint="Defina ANTHROPIC_API_KEY (ou YGS_LLM_API_KEY) no ambiente ou no .env.",
+        )
+
+
 class ScanResultNotFoundError(ScanError):
     """Nenhum resultado de scan com o ID pedido."""
 
@@ -145,6 +161,65 @@ class ScanImageNotFoundError(ScanError):
     def __init__(self, image_id: int) -> None:
         super().__init__(f"Imagem de scan #{image_id} não encontrada.")
         self.image_id = image_id
+
+
+# --------------------------------------------------------------- captura
+
+
+class CaptureError(YugiohScannerError):
+    """Falha ao capturar uma página de um scanner/impressora físico.
+
+    Categoria irmã de `ScanError`, não subclasse dela: `ScanError` documenta
+    falha que impede um `ScanJob` inteiro, e uma falha de captura acontece
+    *antes* de qualquer `ScanJob` existir (plano §22).
+    """
+
+
+class ScannerUnsupportedPlatformError(CaptureError):
+    """Captura por scanner só existe via WIA (Windows) nesta versão."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "Captura por scanner só está disponível no Windows (WIA).",
+            hint="Use `scan PASTA` com fotos tiradas por outro meio.",
+        )
+
+
+class ScannerUnavailableError(CaptureError):
+    """O backend existe mas `pywin32` não está instalado."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "Suporte a scanner/impressora não está instalado.",
+            hint='Instale com: pip install -e ".[wia]"',
+        )
+
+
+class ScannerBackendUnknownError(CaptureError):
+    """Nome de backend de captura sem implementação registrada."""
+
+    def __init__(self, name: str, available: list[str]) -> None:
+        super().__init__(
+            f"Backend de captura desconhecido: {name!r}.",
+            hint=f"Disponíveis: {', '.join(available)}",
+        )
+
+
+class NoScannerDeviceFoundError(CaptureError):
+    """WIA não encontrou nenhum scanner/impressora conectado."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "Nenhum scanner/impressora WIA encontrado.",
+            hint="Confira se o dispositivo está ligado e instalado no Windows.",
+        )
+
+
+class ScanCaptureFailedError(CaptureError):
+    """A automação COM/WIA falhou durante a captura em si."""
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(f"Falha ao capturar da página: {reason}")
 
 
 # ---------------------------------------------------------------- coleção

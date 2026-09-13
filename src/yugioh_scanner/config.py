@@ -165,7 +165,10 @@ class Settings(BaseSettings):
     # -------------------------------------------------------------------- web
     web_host: str = "127.0.0.1"
     web_port: int = Field(default=8000, gt=0, lt=65536)
-    max_upload_mb: int = Field(default=10, gt=0)
+    #: PNGs de scanner reais passam fácil de 10-20 MB numa página A4/Carta a
+    #: 300+ DPI (medido: ~18 MB numa digitalização real) — o padrão antigo de
+    #: 10 MB rejeitava scans legítimos no upload da Web.
+    max_upload_mb: int = Field(default=50, gt=0)
     max_upload_files: int = Field(default=200, gt=0)
     max_image_pixels: int = Field(
         default=40_000_000, gt=0, description="Guarda contra decompression bomb."
