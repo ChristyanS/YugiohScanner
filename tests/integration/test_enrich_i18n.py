@@ -18,7 +18,7 @@ from yugioh_scanner.repositories.sync_state import SyncStateRepository
 from yugioh_scanner.services.sync_service import SYNC_KEY_YAML_YUGI_ETAG, SyncService
 from yugioh_scanner.ygoprodeck.client import YgoProDeckClient
 
-DATASET_URL = "https://raw.githubusercontent.com/DawnbrandBots/yaml-yugi/aggregate/cards.json"
+DATASET_URL = "https://dawnbrandbots.github.io/yaml-yugi/cards.json"
 
 _DATASET = [
     {

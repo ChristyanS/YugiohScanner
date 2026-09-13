@@ -148,16 +148,25 @@ class Settings(BaseSettings):
     )
 
     # ------------------------------------------------------ enriquecimento i18n
-    #: Arquivo agregado do yaml-yugi (ADR 0012) — dump estático (~94 MB,
-    #: regenerado diariamente), não uma API paginada. Consumido só por
-    #: `db enrich-i18n`, nunca pelo `sync` principal (docs/proposta-fontes-
-    #: dados-catalogo.md: fonte opcional, isolada, nunca quebra o catálogo
-    #: primário).
-    yaml_yugi_cards_url: str = (
-        "https://raw.githubusercontent.com/DawnbrandBots/yaml-yugi/aggregate/cards.json"
-    )
+    #: Arquivo agregado do yaml-yugi (ADR 0012) — dump estático (~100 MB),
+    #: não uma API paginada. Consumido só por `db enrich-i18n`, nunca pelo
+    #: `sync` principal (docs/proposta-fontes-dados-catalogo.md: fonte
+    #: opcional, isolada, nunca quebra o catálogo primário).
+    #:
+    #: **Não** é a branch git `aggregate` do repositório
+    #: (`raw.githubusercontent.com/.../aggregate/cards.json`) — essa branch
+    #: ficou travada em 2024-06-02 (confirmado ao vivo em 2026-09-13: o
+    #: workflow que a publicava parou de escrever nela, embora ainda "rode
+    #: com sucesso" — provavelmente publica só para o GitHub Pages agora). A
+    #: URL certa é o **GitHub Pages** do projeto, que está de fato
+    #: atualizado (confirmado: `Last-Modified` do mesmo dia, RA05-PT/QCAC-JA
+    #: presentes para cartas que a branch git não tinha). Se algum dia isso
+    #: voltar a ficar defasado, `db enrich-i18n` não vai falhar — só vai
+    #: importar dados velhos de novo, em silêncio; vale checar o
+    #: `Last-Modified` do header HTTP periodicamente.
+    yaml_yugi_cards_url: str = "https://dawnbrandbots.github.io/yaml-yugi/cards.json"
     http_download_timeout_s: float = Field(
-        default=120.0, gt=0, description="Timeout maior: o dump do yaml-yugi tem ~94 MB."
+        default=120.0, gt=0, description="Timeout maior: o dump do yaml-yugi tem ~100 MB."
     )
 
     # ------------------------------------------------------------------- rede
