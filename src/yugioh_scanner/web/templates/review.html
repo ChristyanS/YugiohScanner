@@ -200,20 +200,23 @@ async function selectCandidate(i) {
   if (!c) return;
   clearSelectionHighlight();
   candidatesEl.children[i].classList.add("selected");
-  // Só o candidato do topo-5 que já é a carta escolhida pelo motor carrega o
-  // set detectado pelo código (plano §7.4) — qualquer outro (troca de
-  // candidato ou busca manual) começa sem set, para não sugerir um print de
-  // outra carta.
-  const autoPrintId = c.card_id === r.card_id ? r.card_print_id : null;
-  await selectCard(c.card_id, c, autoPrintId);
+  await selectCard(c.card_id, c);
 }
 
 async function selectManualCard(card, li) {
-  const r = current();
   clearSelectionHighlight();
   li.classList.add("selected");
-  const autoPrintId = card.id === r.card_id ? r.card_print_id : null;
-  await selectCard(card.id, { card_id: card.id, name: card.name, score: null }, autoPrintId);
+  await selectCard(card.id, { card_id: card.id, name: card.name, score: null });
+}
+
+// Prints que o código lido resolve contra o catálogo **para a carta dada**,
+// não importa se ela é ou não a que o motor elegeu vencedora do nome — o
+// código é o sinal mais confiável assim que a carta certa é escolhida
+// (achado real do usuário: trocar de candidato limpava o set, porque só o
+// vencedor do nome recebia o set detectado pelo código).
+function codePrintsForCard(cardId) {
+  const r = current();
+  return (r.code_prints || []).filter((p) => p.card_id === cardId);
 }
 
 //: Sem busca, mostra só os primeiros N — com o enriquecimento `yaml-yugi`
@@ -250,7 +253,7 @@ printSearch.addEventListener("input", () => {
   printSearchTimer = setTimeout(() => renderPrintOptions(printSearch.value), 200);
 });
 
-async function selectCard(cardId, candidate, autoPrintId) {
+async function selectCard(cardId, candidate) {
   selectedCandidate = candidate;
   // Feedback visível: sem isto, escolher um resultado da busca manual não
   // muda nada acima da dobra (o destaque fica só na lista, que pode já estar
@@ -264,7 +267,22 @@ async function selectCard(cardId, candidate, autoPrintId) {
   printSearch.value = "";
   renderPrintOptions("");
   printSection.hidden = false;
-  const auto = autoPrintId ? String(autoPrintId) : "";
+
+  // O código lido tem prioridade sobre o nome (mesma regra do motor de
+  // matching, `matching/engine.py`): resolve para esta carta específica,
+  // não só para a que o motor elegeu vencedora do nome.
+  const codeMatches = codePrintsForCard(cardId);
+  let auto = "";
+  if (codeMatches.length === 1) {
+    const match = currentPrints.find((p) => p.id === codeMatches[0].print_id);
+    if (match) auto = String(match.id);
+  } else if (codeMatches.length > 1) {
+    // Mesmo código, várias raridades (ex.: Rarity Collection) — a escolha é
+    // do usuário, mas filtra a busca pelo próprio código lido para não
+    // obrigar a rolar entre dezenas de sets pra achar as opções certas.
+    printSearch.value = codeMatches[0].set_code;
+    renderPrintOptions(codeMatches[0].set_code);
+  }
   printSelect.value = auto;
   selectedPrint = auto || null;
   printAutoHint.hidden = !auto;
@@ -282,6 +300,15 @@ function applyLanguageFilter() {
   const lang = languageSelect.value;
   languageHint.hidden = true;
   if (lang === "EN" || !currentPrints.length) return;
+  if (selectedPrint) {
+    // Já há um print selecionado (tipicamente pelo código lido, prioridade
+    // máxima) e ele já está no idioma certo — não sobrescrever com o
+    // primeiro print daquele idioma que aparecer na lista. Bug real: um
+    // código válido (ex. RA05-PT055) escolhia o print certo, e este filtro
+    // trocava por outro set qualquer (ex. DUOV-PT029) só por também ser PT.
+    const chosen = currentPrints.find((p) => String(p.id) === selectedPrint);
+    if (chosen && chosen.region === lang) return;
+  }
   const match = currentPrints.find((p) => p.region === lang);
   if (match) {
     // Filtra pelo próprio código do print detectado: garante que ele exista

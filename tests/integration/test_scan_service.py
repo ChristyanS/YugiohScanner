@@ -722,6 +722,20 @@ class TestLlmFallback:
         # que já resolveram por OCR local não pagam o custo extra.
         assert [Path(call).name for call in fallback.calls] == ["garbage.jpg"]
 
+        # Regressão: quando o fallback é adotado, o texto bruto persistido
+        # precisa ser o que ele leu, não o "ZZQX WROMBAT FLURB" do worker
+        # original — senão a revisão mostraria "(vazio)"/lixo ao lado de uma
+        # carta corretamente identificada.
+        with catalog.session() as session:
+            image = session.execute(
+                select(ScanImage).where(ScanImage.file_path.like("%garbage.jpg"))
+            ).scalar_one()
+            result = session.execute(
+                select(ScanResult).where(ScanResult.scan_image_id == image.id)
+            ).scalar_one()
+            assert result.ocr_name_raw == "Blue-Eyes White Dragon"
+            assert result.ocr_code_raw == "CT13-EN008"
+
     def test_fallback_disabled_by_default(
         self, catalog: Database, settings: Settings, cards_folder: Path
     ) -> None:
@@ -750,6 +764,66 @@ class TestLlmFallback:
 
         assert report.failed == 0
         assert report.pending == 1  # garbage.jpg continua sem candidato
+
+
+class TestReviewCodePrints:
+    """`ScanService._attach_code_prints`: a revisão precisa do código lido
+    resolvido contra o catálogo **de novo**, não só do print único que o
+    motor gravou em `card_print_id` — é o que permite preencher o set certo
+    mesmo trocando de candidato, e oferecer as raridades certas quando o
+    código sozinho não desempata (achado real do usuário: set vazio/errado
+    ao escolher outro candidato na revisão)."""
+
+    def test_unambiguous_code_resolves_to_a_single_print(
+        self, catalog: Database, settings: Settings, cards_folder: Path
+    ) -> None:
+        scan(catalog, settings, cards_folder, no_auto=True)
+        svc = service(catalog, settings)
+        dark_magician_result = next(
+            r for r in svc.pending_results() if r.ocr_name_raw == "Dark Magician"
+        )
+
+        assert [p["card_id"] for p in dark_magician_result.code_prints] == [DARK_MAGICIAN]
+        assert dark_magician_result.code_prints[0]["set_code"] == "SDK-001"
+
+    def test_ambiguous_rarity_exposes_every_print_for_the_user_to_pick(
+        self, catalog: Database, settings: Settings, tmp_path: Path
+    ) -> None:
+        """`LOB-001` existe em duas raridades da mesma carta na fixture
+        (plano §0.3.3) — o motor não pode adivinhar qual, mas a revisão
+        precisa mostrar as duas, não nenhuma."""
+        folder = tmp_path / "lob"
+        make_card_image(folder / "blue_eyes_lob.jpg", name="Blue-Eyes White Dragon", set_code="LOB-001")
+        register_provider(
+            "fake-lob",
+            lambda _settings: FakeOCRProvider(
+                {"blue_eyes_lob.jpg": {"name": "Blue-Eyes White Dragon", "code": "LOB-001"}}
+            ),
+        )
+        try:
+            scan(catalog, settings, folder, provider_name="fake-lob", no_auto=True)
+        finally:
+            unregister_provider("fake-lob")
+
+        svc = service(catalog, settings)
+        result = next(r for r in svc.pending_results() if r.ocr_code_raw == "LOB-001")
+
+        assert len(result.code_prints) == 2
+        assert {p["card_id"] for p in result.code_prints} == {BLUE_EYES}
+        assert {p["rarity"] for p in result.code_prints} == {"Ultra Rare", "Secret Rare"}
+
+    def test_get_result_also_attaches_code_prints(
+        self, catalog: Database, settings: Settings, cards_folder: Path
+    ) -> None:
+        scan(catalog, settings, cards_folder, no_auto=True)
+        svc = service(catalog, settings)
+        dark_magician_result = next(
+            r for r in svc.pending_results() if r.ocr_name_raw == "Dark Magician"
+        )
+
+        detail = svc.get_result(dark_magician_result.id)
+
+        assert [p["card_id"] for p in detail.code_prints] == [DARK_MAGICIAN]
 
 
 class _SequentialOCRProvider(BaseOCRProvider):

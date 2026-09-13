@@ -55,6 +55,7 @@ from ..matching.print_language import (
     PrintLanguageResolver,
     SiblingPrintLanguageResolver,
 )
+from ..matching.resolver import PrintResolver
 from ..ocr.base import REGION_CODE, REGION_FULL, REGION_NAME, OCRProvider, OCRRequest
 from ..ocr.registry import create_provider
 from ..repositories.collection import CollectionKey, CollectionRepository
@@ -128,6 +129,22 @@ class ImageEvent:
             "crop_index": self.crop_index,
             "crop_count": self.crop_count,
         }
+
+
+@dataclass(frozen=True, slots=True)
+class FallbackReading:
+    """Resultado de uma tentativa da cascata LLM (plano §6.3).
+
+    Carrega o texto **bruto** que o provider de fallback leu junto do
+    `MatchResult` — quando esta leitura é adotada, é este texto (não o do
+    worker original) que precisa virar `ScanResult.ocr_name_raw`/`ocr_code_raw`,
+    senão a revisão mostra "(vazio)" ao lado de uma carta que só foi
+    identificada graças ao fallback.
+    """
+
+    match: MatchResult
+    name_raw: str
+    code_raw: str
 
 
 @dataclass
@@ -294,7 +311,27 @@ class ScanService:
             # `lazy` por padrão e o chamador (CLI) acessa fora deste `with`.
             for result in results:
                 _ = result.scan_image.file_path
+            self._attach_code_prints(session, results)
             return results
+
+    def _attach_code_prints(self, session: Session, results: list[ScanResult]) -> None:
+        """Anexa a cada leitura os prints que o código bruto resolve **hoje**.
+
+        Recalculado sempre (não persistido em `ScanResult` — plano §7.2 trata
+        resolução de código como algo a confrontar contra o banco, não a
+        gravar) e, crucialmente, **sem filtrar pela carta que o motor elegeu
+        vencedora do nome**: é isto que a tela de revisão usa para preencher o
+        set corretamente mesmo quando a pessoa troca de candidato — nome e
+        código podem apontar para cartas diferentes (o conflito é por isso
+        que a leitura caiu em revisão manual), e o código continua sendo a
+        evidência mais confiável assim que a carta certa é escolhida (achado
+        real do usuário: trocar de candidato limpava o set, ou herdava o de
+        outra carta via filtro de idioma).
+        """
+        resolver = PrintResolver(session)
+        for result in results:
+            prints = resolver.resolve(result.ocr_code_raw).prints if result.ocr_code_raw else []
+            result.code_prints = [p.as_dict() for p in prints]
 
     def get_image_path(self, scan_image_id: int) -> Path:
         """Caminho no disco da foto original (Fase 8: `/review` mostra a
@@ -313,6 +350,7 @@ class ScanService:
             if result is None:
                 raise ScanResultNotFoundError(result_id)
             _ = result.scan_image.file_path
+            self._attach_code_prints(session, [result])
             session.expunge(result)
             return result
 
@@ -634,14 +672,23 @@ class ScanService:
 
         match_result = engine.match(crop.read_name, crop.read_code or None)
         decision = match_result.decision
+        ocr_name_raw = crop.read_name
+        ocr_code_raw = crop.read_code
 
         # Cascata (plano §6.3): só a fração duvidosa reprocessa por LLM —
         # decisão `auto` já está resolvida e não vale o custo/latência extra.
         if decision != Decision.AUTO:
             fallback = self._try_fallback(outcome.path, crop.region, engine)
-            if fallback is not None and fallback.confidence >= match_result.confidence:
-                match_result = fallback
-                decision = fallback.decision
+            if fallback is not None and fallback.match.confidence >= match_result.confidence:
+                match_result = fallback.match
+                decision = fallback.match.decision
+                # O texto bruto persistido precisa ser o que de fato produziu
+                # esta decisão — senão a revisão mostra "(vazio)" ao lado de
+                # uma carta identificada (achado real: o worker local não leu
+                # nada, o fallback leu e casou, mas `ScanResult.ocr_name_raw`
+                # continuava com o texto do worker).
+                ocr_name_raw = fallback.name_raw or ocr_name_raw
+                ocr_code_raw = fallback.code_raw or ocr_code_raw
 
         if no_auto and decision == Decision.AUTO:
             decision = Decision.PENDING
@@ -653,8 +700,8 @@ class ScanService:
                 image.id,
                 decision,
                 match_result,
-                ocr_name_raw=crop.read_name or None,
-                ocr_code_raw=crop.read_code or None,
+                ocr_name_raw=ocr_name_raw or None,
+                ocr_code_raw=ocr_code_raw or None,
                 scan_repo=scan_repo,
                 collection_repo=collection_repo,
                 crop_index=crop.region.index,
@@ -680,8 +727,8 @@ class ScanService:
             status=crop.status,
             decision=decision.value,
             result_id=result_id,
-            ocr_name=crop.read_name or None,
-            ocr_code=crop.read_code or None,
+            ocr_name=ocr_name_raw or None,
+            ocr_code=ocr_code_raw or None,
             card_name=match_result.card_name,
             set_code=match_result.set_code,
             confidence=match_result.confidence,
@@ -809,7 +856,7 @@ class ScanService:
 
     def _try_fallback(
         self, path: Path, region: CropRegion, engine: MatchingEngine
-    ) -> MatchResult | None:
+    ) -> FallbackReading | None:
         """Reprocessa uma leitura duvidosa com o provider de fallback.
 
         Reabre e prepara a imagem de novo (o worker já fechou a sua cópia —
@@ -861,4 +908,4 @@ class ScanService:
             crop_index=region.index,
             confidence=round(fallback_match.confidence, 3),
         )
-        return fallback_match
+        return FallbackReading(match=fallback_match, name_raw=name, code_raw=code)

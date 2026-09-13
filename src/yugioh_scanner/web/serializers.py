@@ -41,6 +41,11 @@ def result_to_dict(result: ScanResult, *, with_image: bool = True) -> dict[str, 
         "confidence": round(result.confidence, 4),
         "margin": round(result.margin, 4),
         "candidates": result.candidates or [],
+        # Prints que o código bruto resolve **agora** contra o catálogo,
+        # não filtrados pela carta que o motor elegeu vencedora do nome —
+        # a revisão usa isto para preencher o set certo mesmo quando o
+        # usuário escolhe um candidato diferente (matching/resolver.py).
+        "code_prints": result.code_prints or [],
         "decision": result.decision,
         "applied": result.applied,
         "collection_item_id": result.collection_item_id,

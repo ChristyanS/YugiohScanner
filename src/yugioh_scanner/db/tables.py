@@ -522,6 +522,10 @@ class ScanResult(Base):
     """
 
     __tablename__ = "scan_result"
+    #: Permite o atributo transiente `code_prints` abaixo coexistir com as
+    #: colunas `Mapped[]` — sem isto o SQLAlchemy 2.0 recusa a classe inteira
+    #: por causa da anotação sem `Mapped[]` (ver comentário no atributo).
+    __allow_unmapped__ = True
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     scan_image_id: Mapped[int] = mapped_column(
@@ -577,6 +581,13 @@ class ScanResult(Base):
     decided_at: Mapped[dt.datetime | None] = mapped_column(DateTime)
 
     scan_image: Mapped[ScanImage] = relationship(back_populates="results")
+
+    #: Não é coluna — atributo comum (`__allow_unmapped__` acima), calculado
+    #: sob demanda por `ScanService._attach_code_prints` a partir de
+    #: `ocr_code_raw`. Existe só para a resposta da API de revisão poder
+    #: oferecer o set certo mesmo quando a carta escolhida não é a que o
+    #: motor apontou como vencedora do nome (matching/resolver.py).
+    code_prints: list[dict[str, object]] | None = None
 
     __table_args__ = (
         Index("ix_scan_result_image", "scan_image_id"),
