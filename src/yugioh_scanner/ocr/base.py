@@ -23,6 +23,10 @@ if TYPE_CHECKING:  # pragma: no cover
 REGION_NAME = "name"
 REGION_CODE = "code"
 REGION_FULL = "full"
+#: O "Card ID" impresso no canto inferior-esquerdo — a chave primária real
+#: do catálogo (`Card.id`), mais forte que nome/código para identidade
+#: (`matching/engine.py::_from_passcode`, `matching/passcode.py`).
+REGION_PASSCODE = "passcode"
 
 
 @dataclass(frozen=True, slots=True)

@@ -54,6 +54,37 @@ class TestAddCopies:
         repo.add_copies(CollectionKey(card_id=card.id, card_print_id=card_print.id), 1)
         assert repo.count_items() == 2
 
+    def test_pending_set_code_distinguishes_items_with_null_print(self, session: Session) -> None:
+        """Regressão: antes de `set_code_full`/`rarity` entrarem em `ux_collection`,
+        dois itens do mesmo card com `card_print_id NULL` colidiam na mesma
+        linha mesmo vindo de sets pendentes diferentes."""
+        card = make_card(session)
+        repo = CollectionRepository(session)
+        repo.add_copies(CollectionKey(card_id=card.id, set_code_full="LOB-EN001"), 1)
+        repo.add_copies(CollectionKey(card_id=card.id, set_code_full="SDK-001"), 1)
+        assert repo.count_items() == 2
+
+    def test_pending_rarity_also_distinguishes_items_with_null_print(self, session: Session) -> None:
+        card = make_card(session)
+        repo = CollectionRepository(session)
+        repo.add_copies(
+            CollectionKey(card_id=card.id, set_code_full="RA05-EN032", rarity="Ultra Rare"), 1
+        )
+        repo.add_copies(
+            CollectionKey(card_id=card.id, set_code_full="RA05-EN032", rarity="Starlight Rare"), 1
+        )
+        assert repo.count_items() == 2
+
+    def test_same_pending_set_and_rarity_still_merge(self, session: Session) -> None:
+        card = make_card(session)
+        repo = CollectionRepository(session)
+        repo.add_copies(CollectionKey(card_id=card.id, set_code_full="LOB-EN001"), 1)
+        repo.add_copies(CollectionKey(card_id=card.id, set_code_full="LOB-EN001"), 2)
+        assert repo.count_items() == 1
+        item = repo.find(CollectionKey(card_id=card.id, set_code_full="LOB-EN001"))
+        assert item is not None
+        assert item.quantity == 3
+
     def test_different_condition_is_a_different_item(self, session: Session) -> None:
         card = make_card(session)
         repo = CollectionRepository(session)
@@ -200,6 +231,36 @@ class TestSetPrint:
     def test_missing_item_raises(self, session: Session) -> None:
         with pytest.raises(CollectionItemNotFoundError):
             CollectionRepository(session).set_print(999999, 1)
+
+    def test_clears_pending_set_and_rarity_once_a_print_resolves(self, session: Session) -> None:
+        """Uma vez resolvido de verdade, os campos "pendente" não devem
+        sobrar — a leitura passa a vir de `card_print` via `*_display`."""
+        card = make_card(session)
+        card_print = make_print(session, card, "RA05-EN032")
+        repo = CollectionRepository(session)
+        item = repo.add_copies(
+            CollectionKey(card_id=card.id, set_code_full="RA05-EN032", rarity="Ultra Rare"), 1
+        )
+
+        updated = repo.set_print(item.id, card_print.id)
+
+        assert updated.set_code_full is None
+        assert updated.rarity is None
+
+
+class TestSetRarity:
+    def test_sets_the_pending_rarity_text(self, session: Session) -> None:
+        card = make_card(session)
+        repo = CollectionRepository(session)
+        item = repo.add_copies(CollectionKey(card_id=card.id, set_code_full="RA05-EN032"), 1)
+
+        updated = repo.set_rarity(item.id, "Collector's Rare")
+        assert updated.rarity == "Collector's Rare"
+        assert updated.card_print_id is None
+
+    def test_missing_item_raises(self, session: Session) -> None:
+        with pytest.raises(CollectionItemNotFoundError):
+            CollectionRepository(session).set_rarity(999999, "Common")
 
 
 class TestStats:

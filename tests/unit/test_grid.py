@@ -22,9 +22,11 @@ from yugioh_scanner.images.grid import (
     InvalidGridSizeError,
     detect_grid_cells,
     ensure_cv_available,
+    is_cell_blank,
     manual_grid_cells,
     parse_grid_size,
 )
+from yugioh_scanner.images.preprocess import BoundingBox
 
 
 class _FakeCv2:
@@ -167,6 +169,47 @@ class TestDetectGridCellsWithRealOpenCV:
 
         cells = detect_grid_cells(canvas)
         assert len(cells) == 4
+
+
+class TestIsCellBlank:
+    """Célula vazia de `--grid-size` (mesa do scanner sem carta) — plano §22:
+    o layout informado pode ter mais células que cartas reais na página."""
+
+    _FULL_CELL = BoundingBox(0.0, 0.0, 1.0, 1.0)
+
+    def test_uniform_gray_cell_is_blank(self) -> None:
+        image = Image.new("RGB", (300, 435), (245, 245, 245))
+        assert is_cell_blank(image, self._FULL_CELL) is True
+
+    def test_uniform_white_cell_is_blank(self) -> None:
+        image = Image.new("RGB", (300, 435), "white")
+        assert is_cell_blank(image, self._FULL_CELL) is True
+
+    def test_synthetic_card_is_not_blank(self, tmp_path: Path) -> None:
+        # Mesma carta sintética usada por `TestManualGridCells` — tem
+        # moldura, faixas de nome/código e cores distintas: nem de longe lisa.
+        path = make_card_image(tmp_path / "card.jpg")
+        image = Image.open(path)
+        assert is_cell_blank(image, self._FULL_CELL) is False
+
+    def test_high_contrast_noise_is_not_blank(self) -> None:
+        # Ruído xadrez: desvio-padrão e densidade de borda altos dos dois —
+        # o oposto de uma mesa de scanner vazia.
+        image = Image.new("RGB", (300, 435))
+        draw = ImageDraw.Draw(image)
+        for y in range(0, 435, 10):
+            for x in range(0, 300, 10):
+                if (x // 10 + y // 10) % 2 == 0:
+                    draw.rectangle([(x, y), (x + 10, y + 10)], fill="black")
+                else:
+                    draw.rectangle([(x, y), (x + 10, y + 10)], fill="white")
+        assert is_cell_blank(image, self._FULL_CELL) is False
+
+    def test_degenerate_zero_area_box_is_never_blank(self) -> None:
+        # Guarda defensiva: uma caixa inválida não deve ser tratada como
+        # "vazia" (isso a descartaria silenciosamente do fan-out).
+        image = Image.new("RGB", (300, 435), "white")
+        assert is_cell_blank(image, BoundingBox(0.5, 0.5, 0.5, 0.5)) is False
 
 
 class TestParseGridSize:

@@ -23,12 +23,13 @@ from PIL import Image
 
 from ..config import Settings
 from ..errors import YugiohScannerError
-from ..images.grid import detect_grid_cells, manual_grid_cells
+from ..images.grid import detect_grid_cells, is_cell_blank, manual_grid_cells
 from ..images.preprocess import BoundingBox, ImageError, PreparedImage, load_image, prepare_regions
 from ..ocr.base import (
     REGION_CODE,
     REGION_FULL,
     REGION_NAME,
+    REGION_PASSCODE,
     OCRProvider,
     OCRRequest,
     OCRResult,
@@ -110,6 +111,14 @@ class CropOutcome:
             return ""
         return self.ocr.best(REGION_CODE)
 
+    @property
+    def read_passcode(self) -> str:
+        """Passcode ("Card ID") lido. Mesmo caso do set code: um token só,
+        a melhor caixa é a resposta certa."""
+        if self.ocr is None:
+            return ""
+        return self.ocr.best(REGION_PASSCODE)
+
 
 @dataclass
 class ScanOutcome:
@@ -125,6 +134,10 @@ class ScanOutcome:
     task: ScanTask
     crops: list[CropOutcome] = field(default_factory=list)
     elapsed_ms: int = 0
+    #: Células de uma grade `--grid-size` descartadas por estarem vazias
+    #: (mesa do scanner sem carta) — nunca rodaram OCR, nunca viraram
+    #: `CropOutcome`/`ScanResult`.
+    skipped_empty: int = 0
     #: Preenchidos só quando a foto inteira falhou antes de qualquer recorte
     #: (arquivo corrompido, formato inválido) — `crops` fica vazio nesse caso.
     preprocess_status: str | None = None
@@ -191,18 +204,18 @@ def reset_provider() -> None:
 def _read_with_fallback(provider: OCRProvider, prepared: PreparedImage, source: str) -> OCRResult:
     """Lê as ROIs e só recorre à imagem inteira se elas não renderem nada.
 
-    A região `full` custa tanto quanto as duas ROIs juntas. Processá-la sempre
+    A região `full` custa tanto quanto as ROIs juntas. Processá-la sempre
     triplicaria o tempo de cada foto para servir a um punhado de casos ruins —
     então ela é a rede de segurança, não o caminho normal (plano §5.2).
     """
     rois = {
         name: image
         for name, image in prepared.regions.items()
-        if name in (REGION_NAME, REGION_CODE)
+        if name in (REGION_NAME, REGION_CODE, REGION_PASSCODE)
     }
     result = provider.read(OCRRequest(regions=rois, source=source))
 
-    if result.joined(REGION_NAME) or result.best(REGION_CODE):
+    if result.joined(REGION_NAME) or result.best(REGION_CODE) or result.best(REGION_PASSCODE):
         return result
 
     full = prepared.regions.get(REGION_FULL)
@@ -249,6 +262,7 @@ def process_task(task: ScanTask) -> ScanOutcome:
             elapsed_ms=int((time.perf_counter() - started) * 1000),
         )
 
+    skipped_empty = 0
     try:
         boxes: list[BoundingBox] = []
         if _GRID_MODE:
@@ -261,7 +275,20 @@ def process_task(task: ScanTask) -> ScanOutcome:
                 if _GRID_SIZE is not None
                 else detect_grid_cells(image)
             )
-        regions: list[BoundingBox | None] = list(boxes) if len(boxes) >= 2 else [None]
+        grid_active = len(boxes) >= 2
+        if grid_active and _GRID_SIZE is not None:
+            # O layout informado pode ter mais células que cartas reais na
+            # página (ex.: 7 cartas numa folha de fichário com disposição
+            # 3x3) — sem isto, cada célula vazia vira uma leitura de OCR de
+            # ruído. Nunca esvazia a lista inteira: uma página aparentemente
+            # toda "vazia" é sinal de limiar errado, não de página em branco.
+            non_blank = [box for box in boxes if not is_cell_blank(image, box)]
+            skipped_empty = len(boxes) - len(non_blank)
+            if non_blank:
+                boxes = non_blank
+            else:
+                skipped_empty = 0
+        regions: list[BoundingBox | None] = list(boxes) if grid_active else [None]
         crops = [
             _process_one_crop(provider, image, task, CropRegion(idx, len(regions), box))
             for idx, box in enumerate(regions)
@@ -270,7 +297,7 @@ def process_task(task: ScanTask) -> ScanOutcome:
         image.close()
 
     elapsed_ms = int((time.perf_counter() - started) * 1000)
-    return ScanOutcome(task=task, crops=crops, elapsed_ms=elapsed_ms)
+    return ScanOutcome(task=task, crops=crops, elapsed_ms=elapsed_ms, skipped_empty=skipped_empty)
 
 
 def _process_one_crop(

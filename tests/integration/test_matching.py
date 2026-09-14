@@ -138,6 +138,21 @@ class TestConflict:
         assert result.card_id == BLUE_EYES
         assert result.card_print_id is None, "nada é gravado com o print do conflito"
 
+    def test_conflicting_code_still_appears_as_a_candidate(
+        self, matcher: MatchingEngine
+    ) -> None:
+        """Achado real do usuário (Access Code Talker/Dragão Agave): o código
+        identificava a carta certa, mas ela nunca aparecia entre os
+        candidatos — só os palpites por texto, sem relação nenhuma com a
+        carta de verdade, obrigando busca manual mesmo com a identidade já
+        resolvida pelo código."""
+        result = matcher.match("Blue-Eyes White Dragon", "SDK-001")  # SDK-001 = Dark Magician
+        card_ids = [c["card_id"] for c in result.candidates]
+        assert DARK_MAGICIAN in card_ids
+        # Evidência mais forte que o nome: entra na frente da lista.
+        assert result.candidates[0]["card_id"] == DARK_MAGICIAN
+        assert "código" in result.candidates[0]["name"]
+
 
 class TestCrossConfirmation:
     """O set code confirma o nome mesmo sem concordar com o 1º candidato.
@@ -166,6 +181,93 @@ class TestCrossConfirmation:
         result = matcher.match("Blue-Eyes White Dragon", "SDK-001")
         assert result.card_id == BLUE_EYES
         assert result.decision == Decision.MANUAL
+
+
+class TestPasscodeIdentity:
+    """Passcode ("Card ID", canto inferior-esquerdo) como fonte primária de
+    identidade — pedido real do usuário: é uma chave exata contra o
+    catálogo, mais forte que nome ou set code."""
+
+    def test_passcode_alone_identifies_the_card_even_with_garbled_name(
+        self, matcher: MatchingEngine
+    ) -> None:
+        result = matcher.match("ZZQX WROMBAT FLURB", None, "89631139")
+        assert result.card_id == BLUE_EYES
+        assert result.passcode_verified is True
+        assert result.decision == Decision.AUTO
+        assert result.card_print_id is None  # sem código, sem set — só a identidade
+
+    def test_ocr_corrupted_passcode_still_resolves(self, matcher: MatchingEngine) -> None:
+        # 'l' -> "L" -> "1" após a correção de `domain/passcode.py`.
+        result = matcher.match("ZZQX WROMBAT FLURB", None, "8963ll39")
+        assert result.card_id == BLUE_EYES
+        assert result.passcode_verified is True
+
+    def test_passcode_and_agreeing_code_resolve_the_print_too(
+        self, matcher: MatchingEngine
+    ) -> None:
+        result = matcher.match("garbled name", "CT13-EN008", "89631139")
+        assert result.card_id == BLUE_EYES
+        assert result.card_print_id is not None
+        assert result.decision == Decision.AUTO
+        assert result.passcode_verified is True
+
+    def test_passcode_wins_over_a_confidently_read_wrong_name(
+        self, matcher: MatchingEngine
+    ) -> None:
+        """O nome bate perfeito com outra carta — sem passcode isso resolveria
+        sozinho (`TestExactMatching`). Com o passcode presente, é conflito."""
+        result = matcher.match("Dark Magician", None, "89631139")  # passcode = Blue-Eyes
+        assert result.decision == Decision.MANUAL
+        assert result.card_id == BLUE_EYES  # o passcode ainda é a resposta mais forte
+        assert result.passcode_verified is False
+        assert "passcode" in result.reason
+
+    def test_conflicting_passcode_still_appears_as_a_candidate(
+        self, matcher: MatchingEngine
+    ) -> None:
+        """Achado real do usuário: Access Code Talker e Dragão Agave foram
+        identificados pelo Card ID, mas não apareciam entre os candidatos —
+        só palpites de nome sem relação nenhuma com a carta de verdade."""
+        result = matcher.match("Dark Magician", None, "89631139")  # passcode = Blue-Eyes
+        card_ids = [c["card_id"] for c in result.candidates]
+        assert BLUE_EYES in card_ids
+        assert result.candidates[0]["card_id"] == BLUE_EYES
+        assert "Card ID" in result.candidates[0]["name"]
+
+    def test_passcode_conflicting_with_code_is_manual(self, matcher: MatchingEngine) -> None:
+        result = matcher.match("garbled name", "SDK-001", "89631139")  # SDK-001 = Dark Magician
+        assert result.decision == Decision.MANUAL
+        assert result.card_id == BLUE_EYES
+        assert result.card_print_id is None
+
+    def test_agreeing_code_overrides_a_conflicting_name(self, matcher: MatchingEngine) -> None:
+        """Achado real do usuário (Dragão Agave, SOFU-PT048): nome ilegível
+        casou por acaso com outra carta a 85,5% de similaridade — score alto
+        o bastante para nunca ser filtrado por um limiar. Mas o código também
+        confirma a mesma carta do passcode: duas evidências validadas e
+        independentes concordando não podem ser derrubadas por um nome que só
+        parece discordar. Só um código que aponta para outra carta é conflito
+        de verdade (`test_passcode_conflicting_with_code_is_manual`)."""
+        result = matcher.match("Dark Magician", "CT13-EN008", "89631139")  # code+passcode = Blue-Eyes
+        assert result.decision == Decision.AUTO
+        assert result.card_id == BLUE_EYES
+        assert result.card_print_id is not None
+        assert result.passcode_verified is True
+
+    def test_unknown_passcode_falls_back_to_name_matching(self, matcher: MatchingEngine) -> None:
+        """8 dígitos, forma válida, mas nenhuma carta real tem esse passcode
+        na fixture — cai exatamente no caminho de sempre (nome/código)."""
+        with_bogus_passcode = matcher.match("Blue-Eyes White Dragon", None, "00000000")
+        without_passcode = matcher.match("Blue-Eyes White Dragon")
+        assert with_bogus_passcode.card_id == without_passcode.card_id == BLUE_EYES
+        assert with_bogus_passcode.decision == without_passcode.decision
+        assert with_bogus_passcode.passcode_verified is False
+
+    def test_missing_passcode_is_a_pure_no_op(self, matcher: MatchingEngine) -> None:
+        result = matcher.match("Blue-Eyes White Dragon", None, None)
+        assert result.card_id == BLUE_EYES
+        assert result.passcode_verified is False
 
 
 class TestAlternateLanguageMatching:

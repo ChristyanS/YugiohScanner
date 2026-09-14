@@ -75,6 +75,7 @@ class CollectionService:
         search: str | None = None,
         set_prefix: str | None = None,
         no_set: bool = False,
+        no_rarity: bool = False,
         sort: str = "name",
         descending: bool = False,
         limit: int | None = None,
@@ -84,6 +85,7 @@ class CollectionService:
             search=search,
             set_prefix=set_prefix,
             no_set=no_set,
+            no_rarity=no_rarity,
             sort=sort,
             descending=descending,
             limit=limit,
@@ -104,6 +106,7 @@ class CollectionService:
         *,
         set_code: str | None = None,
         card_print_id: int | None = None,
+        rarity: str | None = None,
         quantity: int = 1,
         condition: str = DEFAULT_CONDITION,
         edition: str = DEFAULT_EDITION,
@@ -119,16 +122,36 @@ class CollectionService:
         exatamente qual print é (a tela Web lista os prints da carta já
         resolvida, então manda o `id` direto — sem reabrir ambiguidade de
         código); `set_code` quando só o código é conhecido (`collection add
-        --set-code`). Os dois passam pela mesma validação: um print que não
-        pertence à carta resolvida é erro de digitação do usuário, não uma
-        leitura ruidosa de OCR, então nunca vira `NULL` em silêncio
-        (diferente do comportamento do scanner, plano §7.2).
+        --set-code`). Sem `rarity`, os dois passam pela mesma validação de
+        sempre: um print que não pertence à carta resolvida é erro de
+        digitação do usuário, não uma leitura ruidosa de OCR, então nunca vira
+        `NULL` em silêncio (diferente do comportamento do scanner, plano §7.2).
+
+        Com `rarity` explícito e `set_code` ambíguo (2+ raridades
+        catalogadas), a raridade desempata: se bater com uma catalogada,
+        resolve o print de verdade; se não bater com nenhuma (raridade real
+        não catalogada), o item entra com o set conhecido e a raridade como
+        texto pendente (`CollectionItem.set_code_full`/`.rarity`) em vez de
+        erro — desacoplar set de raridade é exatamente para isto.
         """
         card = self._resolve_card(name_query)
+        pending_set_code: str | None = None
+        pending_rarity: str | None = None
         if card_print_id is not None:
             resolved_print_id: int | None = self._validate_print_belongs_to_card(
                 card, card_print_id
             )
+        elif set_code and rarity:
+            prints = PrintResolver(self.session).prints_for_card(card.id, set_code)
+            if not prints:
+                raise PrintNotFoundForCardError(card.name, set_code)
+            matches = [p for p in prints if (p.rarity or "").casefold() == rarity.casefold()]
+            if len(matches) == 1:
+                resolved_print_id = matches[0].print_id
+            else:
+                resolved_print_id = None
+                pending_set_code = prints[0].set_code_full
+                pending_rarity = rarity
         elif set_code:
             resolved_print_id = self._resolve_print_for_card(card, set_code)
         else:
@@ -137,11 +160,40 @@ class CollectionService:
         key = CollectionKey(
             card_id=card.id,
             card_print_id=resolved_print_id,
+            set_code_full=pending_set_code,
+            rarity=pending_rarity,
             condition=condition,
             edition=edition,
             language=language,
         )
         return self.repo.add_copies(key, quantity, source="manual", notes=notes)
+
+    def rarities_for_pending_item(self, item_id: int) -> list[str]:
+        """Raridades catalogadas para o set já conhecido de um item pendente
+        — a picklist que `/collection` mostra em vez de texto livre às cegas."""
+        item = self.get_item(item_id)
+        if item.set_code_full is None:
+            return []
+        return PrintResolver(self.session).rarities_for_set(item.card_id, item.set_code_full)
+
+    def resolve_rarity(self, item_id: int, rarity: str) -> CollectionItem:
+        """Escolhe a raridade de um item com set conhecido mas print pendente.
+
+        Se `rarity` bater com uma das catalogadas para `set_code_full`,
+        resolve o print de verdade (via `set_print`, que também funde com uma
+        linha existente se já houver uma para o print de destino). Caso
+        contrário — raridade real não catalogada — grava como texto livre
+        (`set_rarity`), continuando pendente para revisão futura.
+        """
+        item = self.get_item(item_id)
+        if item.set_code_full is None:
+            raise PrintNotFoundForCardError(item.card.name, "(set indefinido)")
+
+        prints = PrintResolver(self.session).prints_for_card(item.card_id, item.set_code_full)
+        matches = [p for p in prints if (p.rarity or "").casefold() == rarity.casefold()]
+        if len(matches) == 1:
+            return self.repo.set_print(item_id, matches[0].print_id)
+        return self.repo.set_rarity(item_id, rarity)
 
     def _validate_print_belongs_to_card(self, card: Card, card_print_id: int) -> int:
         valid_ids = {p.id for p in self.repo.prints_for_card(card.id)}

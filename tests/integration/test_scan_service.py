@@ -77,6 +77,13 @@ def service(catalog: Database, settings: Settings) -> ScanService:
 def scan(catalog: Database, settings: Settings, folder: Path, **kwargs: object) -> object:
     kwargs.setdefault("provider_name", "fake")
     kwargs.setdefault("workers", 1)
+    # A suíte deste arquivo testa coleção/idempotência/grade/fallback, não a
+    # política "AUTO exige SET" (config.py::auto_requires_print, testada à
+    # parte em `TestAutoRequiresSetPolicy`) — sem isto, "pot_of_greed.jpg"
+    # (fixture de propósito sem código, comentário acima) rebaixaria para
+    # PENDING sob o novo default e desalinharia os números de todos os
+    # outros testes com uma política que não é o que eles exercitam.
+    kwargs.setdefault("require_set", False)
     return service(catalog, settings).scan(folder, **kwargs)  # type: ignore[arg-type]
 
 
@@ -261,7 +268,7 @@ class TestDetectedLanguage:
 
         stub = _StubLanguageResolver(sdk_print_id)
         report = ScanService(catalog, settings, language_resolver=stub).scan(
-            folder, provider_name="fake", workers=1
+            folder, provider_name="fake", workers=1, require_set=False
         )
         assert report.auto_added == 1
         assert stub.calls == [(DARK_MAGICIAN, "PT")]
@@ -351,6 +358,46 @@ class TestIdempotency:
             results_after = session.scalar(select(func.count()).select_from(ScanResult))
             assert results_after == results_before + 4  # 4 ScanResult novos
 
+    def test_job_results_page_shows_the_results_that_job_actually_produced(
+        self, catalog: Database, settings: Settings, cards_folder: Path
+    ) -> None:
+        """Achado real do usuário: `GET /scan/{id}` (`job_results`) filtrava
+        pelo job que descobriu a `ScanImage` pela primeira vez — um
+        `--reprocess` de uma pasta já vista aparecia vazio (scan carta a
+        carta) ou parcial (grade), preso na tela do job original."""
+        first = scan(catalog, settings, cards_folder)
+        second = scan(catalog, settings, cards_folder, reprocess=True)
+
+        svc = service(catalog, settings)
+        first_results = svc.job_results(first.job_id)
+        second_results = svc.job_results(second.job_id)
+
+        assert len(first_results) == 4
+        assert len(second_results) == 4  # não vazio, não parcial
+        assert {r.id for r in first_results}.isdisjoint({r.id for r in second_results})
+
+    def test_reprocess_reapplies_if_the_collection_item_was_deleted_out_of_band(
+        self, catalog: Database, settings: Settings, cards_folder: Path
+    ) -> None:
+        """Achado real do usuário (Scan #71): a coleção ficou vazia por fora
+        deste caminho (reset de banco durante um teste), mas os
+        `ScanResult.applied=True` de um scan anterior continuavam lá —
+        `has_applied_result` recusava reaplicar para sempre, mesmo a carta
+        não existindo mais na coleção. A guarda precisa confirmar que o
+        `collection_item` referenciado ainda existe, não só o flag."""
+        scan(catalog, settings, cards_folder)
+        assert len(snapshot(catalog)) > 0
+
+        with catalog.session() as session:
+            session.execute(CollectionItem.__table__.delete())
+            session.commit()
+        assert snapshot(catalog) == []
+
+        report = scan(catalog, settings, cards_folder, reprocess=True)
+
+        assert report.already_applied == 0  # reaplicou de verdade, não é no-op
+        assert len(snapshot(catalog)) > 0  # a coleção voltou a ter as cartas
+
 
 class TestDryRun:
     def test_writes_nothing_to_the_database(
@@ -410,6 +457,132 @@ class TestNoAuto:
         blue_eyes_event = next(e for e in report.events if e.file_name == "blue_eyes.jpg")
         assert blue_eyes_event.decision == "pending"
         assert blue_eyes_event.card_name == "Blue-Eyes White Dragon"  # a leitura não some
+
+
+class TestRequireSetPolicy:
+    """`config.Settings.auto_requires_print` (default `True`) e o override
+    `scan(require_set=...)` — pedido real do usuário: um AUTO sem set
+    identificado (`pot_of_greed.jpg`, sem código na fixture) nunca deveria
+    passar batido, porque some a referência da foto de origem."""
+
+    def test_default_setting_requires_print_for_auto(self, settings: Settings) -> None:
+        assert settings.auto_requires_print is True
+
+    def test_auto_without_print_downgrades_to_pending_by_default(
+        self, catalog: Database, settings: Settings, cards_folder: Path
+    ) -> None:
+        # Sem `require_set=False` (diferente do helper `scan()` deste
+        # arquivo): exercita o default de verdade de `Settings`.
+        report = service(catalog, settings).scan(
+            cards_folder, provider_name="fake", workers=1
+        )
+        pot_event = next(e for e in report.events if e.file_name == "pot_of_greed.jpg")
+        assert pot_event.decision == "pending"
+        assert pot_event.card_name == "Pot of Greed"  # identificado, só não auto
+
+        blue_eyes_event = next(e for e in report.events if e.file_name == "blue_eyes.jpg")
+        assert blue_eyes_event.decision == "auto"  # tinha código: não é afetado
+
+        assert report.auto_added == 2
+        assert report.pending == 2  # pot_of_greed.jpg + garbage.jpg
+
+    def test_explicit_require_set_false_overrides_the_setting_default(
+        self, catalog: Database, settings: Settings, cards_folder: Path
+    ) -> None:
+        report = service(catalog, settings).scan(
+            cards_folder, provider_name="fake", workers=1, require_set=False
+        )
+        pot_event = next(e for e in report.events if e.file_name == "pot_of_greed.jpg")
+        assert pot_event.decision == "auto"
+        assert report.auto_added == 3
+
+    def test_explicit_require_set_true_overrides_a_false_setting_default(
+        self, catalog: Database, settings: Settings, cards_folder: Path
+    ) -> None:
+        lenient = settings.model_copy(update={"auto_requires_print": False})
+        report = service(catalog, lenient).scan(
+            cards_folder, provider_name="fake", workers=1, require_set=True
+        )
+        pot_event = next(e for e in report.events if e.file_name == "pot_of_greed.jpg")
+        assert pot_event.decision == "pending"
+
+
+class TestRequireRarityPolicy:
+    """`config.Settings.auto_requires_rarity` (default `False`) e o override
+    `scan(require_rarity=...)` — pedido real do usuário: quando o set já é
+    100% identificado mas há 2+ raridades catalogadas para ele (`LOB-001`:
+    Ultra e Secret Rare na fixture, mesmo caso de `test_matching.py::
+    TestAmbiguousRarity`), a carta foi "analisada com sucesso" mesmo sem
+    saber a raridade — por padrão isso não deveria bloquear o AUTO, só ficar
+    pendente a escolha da raridade (`CollectionItem.set_code_full` +
+    raridade em branco, resolvível depois em `/collection`)."""
+
+    def test_default_setting_does_not_require_rarity(self, settings: Settings) -> None:
+        assert settings.auto_requires_rarity is False
+
+    def test_ambiguous_rarity_still_autos_by_default(
+        self, catalog: Database, settings: Settings, tmp_path: Path
+    ) -> None:
+        folder = tmp_path / "cards"
+        make_card_image(
+            folder / "blue_eyes_lob.jpg", name="Blue-Eyes White Dragon", set_code="LOB-001"
+        )
+        register_provider(
+            "fake-lob",
+            lambda _settings: FakeOCRProvider(
+                {"blue_eyes_lob.jpg": {"name": "Blue-Eyes White Dragon", "code": "LOB-001"}}
+            ),
+        )
+        try:
+            report = service(catalog, settings).scan(folder, provider_name="fake-lob", workers=1)
+        finally:
+            unregister_provider("fake-lob")
+
+        assert report.events[0].decision == "auto"
+        assert report.auto_added == 1
+
+        with catalog.session() as session:
+            item = session.execute(
+                select(CollectionItem).where(CollectionItem.card_id == BLUE_EYES)
+            ).scalar_one()
+            assert item.card_print_id is None
+            assert item.set_code_full == "LOB-001"
+            assert item.rarity is None
+
+    def test_explicit_require_rarity_true_downgrades_ambiguous_rarity(
+        self, catalog: Database, settings: Settings, tmp_path: Path
+    ) -> None:
+        folder = tmp_path / "cards"
+        make_card_image(
+            folder / "blue_eyes_lob.jpg", name="Blue-Eyes White Dragon", set_code="LOB-001"
+        )
+        register_provider(
+            "fake-lob-2",
+            lambda _settings: FakeOCRProvider(
+                {"blue_eyes_lob.jpg": {"name": "Blue-Eyes White Dragon", "code": "LOB-001"}}
+            ),
+        )
+        try:
+            report = service(catalog, settings).scan(
+                folder, provider_name="fake-lob-2", workers=1, require_rarity=True
+            )
+        finally:
+            unregister_provider("fake-lob-2")
+
+        assert report.events[0].decision == "pending"
+        assert report.auto_added == 0
+
+    def test_unambiguous_set_still_autos_even_with_require_rarity(
+        self, catalog: Database, settings: Settings, cards_folder: Path
+    ) -> None:
+        """Sets com uma raridade só (`CT13-EN008`, na fixture) já resolvem
+        `card_print_id` sozinhos — não passam pelo desempate de raridade, e
+        `--require-rarity` não deveria bloquear o que já é inequívoco."""
+        report = service(catalog, settings).scan(
+            cards_folder, provider_name="fake", workers=1, require_rarity=True
+        )
+        blue_eyes_event = next(e for e in report.events if e.file_name == "blue_eyes.jpg")
+        assert blue_eyes_event.decision == "auto"
 
 
 class TestFailureIsolation:
@@ -1009,7 +1182,11 @@ class TestGridMode:
         items = snapshot(catalog)
         assert len(items) == 3
         assert all(quantity == 1 for _, _, quantity in items)
-        assert second.auto_added == 0  # já tinham sido aplicados no scan anterior
+        # A decisão do motor continua `auto` para as 3 (mesmo valor mostrado
+        # no log por imagem) — só não escreveram nada novo, por já terem
+        # sido aplicados no scan anterior.
+        assert second.auto_added == 3
+        assert second.already_applied == 3
 
     def test_grid_size_explicit_needs_no_cv2_mocking(
         self, catalog: Database, settings: Settings, tmp_path: Path
@@ -1038,3 +1215,71 @@ class TestGridMode:
         assert report.auto_added == 3  # tudo, menos o garbage
         assert report.pending == 1
         assert report.failed == 0
+
+    def test_grid_size_skips_blank_cells_beyond_the_real_cards(
+        self, catalog: Database, settings: Settings, tmp_path: Path
+    ) -> None:
+        """Achado real do usuário: uma folha de fichário pode ter menos
+        cartas que células no layout informado (ex.: 7 de 9 numa grade 3x3).
+        `make_grid_photo` com 3 leituras compõe um canvas 2x2 (arredondado
+        para cima) — a 4ª célula nunca recebe carta nenhuma, ficando com a
+        cor de fundo sólida do canvas: exatamente uma célula vazia de verdade."""
+        folder = tmp_path / "grid"
+        make_grid_photo(folder, "sheet.jpg", GRID_READINGS[:3])
+
+        report = scan(
+            catalog,
+            settings,
+            folder,
+            provider_name="fake-sequential",
+            workers=1,
+            grid_size=(2, 2),
+        )
+
+        assert report.total_images == 1
+        assert report.skipped_empty == 1
+        assert len(report.events) == 3  # não 4 — a célula vazia nunca virou ScanResult
+        assert sorted(event.crop_index for event in report.events) == [0, 1, 2]
+        assert all(event.crop_count == 3 for event in report.events)
+        assert report.auto_added == 3  # as 3 cartas reais — nenhuma é o garbage
+        assert report.pending == 0
+        assert report.failed == 0
+
+
+class TestPasscodeIdentity:
+    """Passcode ("Card ID", canto inferior-esquerdo) como fonte primária de
+    identidade — ponta a ponta: nome ilegível, passcode sozinho identifica a
+    carta (pedido real do usuário; unidade em `tests/integration/test_matching.py`)."""
+
+    @pytest.fixture(autouse=True)
+    def _fake_passcode_provider(self) -> Iterator[None]:
+        register_provider(
+            "fake-passcode",
+            lambda _settings: FakeOCRProvider(
+                {"garbled.jpg": {"name": "ZZQX WROMBAT FLURB", "passcode": str(BLUE_EYES)}}
+            ),
+        )
+        try:
+            yield
+        finally:
+            unregister_provider("fake-passcode")
+            reset_provider()
+
+    def test_passcode_alone_identifies_the_card_end_to_end(
+        self, catalog: Database, settings: Settings, tmp_path: Path
+    ) -> None:
+        folder = tmp_path / "passcode"
+        make_card_image(folder / "garbled.jpg", name="ZZQX WROMBAT FLURB", set_code="LOB-001")
+
+        report = scan(catalog, settings, folder, provider_name="fake-passcode", workers=1)
+
+        assert report.auto_added == 1
+        assert report.pending == 0
+        event = report.events[0]
+        assert event.card_name == "Blue-Eyes White Dragon"
+        assert event.passcode_verified is True
+        assert event.decision == "auto"
+        assert event.ocr_passcode == str(BLUE_EYES)
+
+        items = snapshot(catalog)
+        assert (BLUE_EYES, None, 1) in items  # sem código lido: identidade sim, print não

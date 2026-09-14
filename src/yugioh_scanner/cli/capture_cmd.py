@@ -77,6 +77,22 @@ def scan_device_command(
     no_auto: bool = typer.Option(
         False, "--no-auto", help="Nada é adicionado sozinho; tudo vira pendente."
     ),
+    require_set: bool = typer.Option(
+        None,
+        "--require-set/--allow-no-set-auto",
+        help=(
+            "Exige set resolvido para AUTO (padrão: YGS_AUTO_REQUIRES_PRINT, "
+            "já ativado). --allow-no-set-auto volta ao comportamento antigo."
+        ),
+    ),
+    require_rarity: bool = typer.Option(
+        None,
+        "--require-rarity/--allow-no-rarity-auto",
+        help=(
+            "Exige raridade exata (não só o set) para AUTO — padrão: "
+            "YGS_AUTO_REQUIRES_RARITY, desligado."
+        ),
+    ),
     interactive: bool = typer.Option(
         False,
         "--interactive",
@@ -132,6 +148,8 @@ def scan_device_command(
             workers=workers,
             apply=apply,
             no_auto=no_auto,
+            require_set=require_set,
+            require_rarity=require_rarity,
             grid=grid,
             grid_size=parsed_grid_size,
             interactive=interactive,

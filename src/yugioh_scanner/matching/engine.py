@@ -29,6 +29,7 @@ from ..domain.confidence import (
 )
 from ..logging_setup import get_logger
 from .candidates import CandidateFinder, NameCandidate, NameIndex
+from .passcode import resolve_passcode
 from .resolver import CodeResolution, PrintResolver
 
 log = get_logger(__name__)
@@ -37,6 +38,33 @@ log = get_logger(__name__)
 #: code. Acima disso, o nome foi lido com clareza suficiente para que a
 #: divergência conte como conflito de verdade.
 _PROMOTION_MAX_GAP = 0.10
+
+
+def _identity_candidate(card_id: int, name: str | None, *, marker: str) -> dict[str, Any]:
+    """Candidato sintético para uma identidade resolvida por código/passcode
+    que conflita com o nome (ou não tem nome nenhum para comparar).
+
+    Achado real do usuário: quando código/passcode identificam uma carta que
+    não está entre os candidatos de nome (fuzzy), o `MatchResult.candidates`
+    ficava só com os candidatos de nome — a carta certa nunca aparecia como
+    opção na revisão, mesmo o sistema já sabendo qual era. `marker` deixa
+    claro na própria lista que veio de uma leitura mais forte que texto
+    aproximado, não de coincidência textual.
+    """
+    label = f"{name} ({marker})" if name else f"Carta #{card_id} ({marker})"
+    return {"card_id": card_id, "name": label, "score": 1.0, "tier": None, "language": None}
+
+
+def _ensure_identity_present(
+    candidate_dicts: list[dict[str, Any]], card_id: int, name: str | None, *, marker: str
+) -> list[dict[str, Any]]:
+    """Garante que `card_id` apareça na lista — na frente, por ser a
+    evidência mais forte — sem duplicar se ele já estiver lá (achado real:
+    quando o código promove um candidato já competitivo, ele já está na
+    lista; só falta quando a carta certa nem aparece no fuzzy de nome)."""
+    if any(c["card_id"] == card_id for c in candidate_dicts):
+        return candidate_dicts
+    return [_identity_candidate(card_id, name, marker=marker), *candidate_dicts]
 
 
 @dataclass
@@ -69,6 +97,11 @@ class MatchResult:
     #: palpite de em que idioma a carta física está impressa. `None` quando
     #: não há candidato de nome (`_from_code_only`: só o set code foi lido).
     matched_language: str | None = None
+    #: A identidade veio do passcode ("Card ID") validado contra o catálogo —
+    #: a fonte mais forte que existe, mais forte que nome ou set code
+    #: (`_from_passcode`). `False` quando a identidade veio do caminho normal
+    #: de nome/código, mesmo que o passcode tenha sido lido mas não validado.
+    passcode_verified: bool = False
 
     @property
     def matched(self) -> bool:
@@ -90,6 +123,7 @@ class MatchResult:
             "candidates": self.candidates,
             "print_options": self.print_options,
             "matched_language": self.matched_language,
+            "passcode_verified": self.passcode_verified,
         }
 
 
@@ -132,10 +166,28 @@ class MatchingEngine:
         log.info("matching.tier_stats", **stats)
         return stats
 
-    def match(self, raw_name: str, raw_code: str | None = None) -> MatchResult:
-        """Casa nome e código lidos com o catálogo."""
+    def match(
+        self,
+        raw_name: str,
+        raw_code: str | None = None,
+        raw_passcode: str | None = None,
+    ) -> MatchResult:
+        """Casa nome, código e passcode lidos com o catálogo.
+
+        O passcode ("Card ID", canto inferior-esquerdo) é a chave primária
+        real do catálogo (`Card.id`) — quando lido e validado
+        (`matching/passcode.py`), decide a identidade da carta sozinho
+        (`_from_passcode`), com nome/código entrando só como checagem de
+        conflito e resolução de print. Ausente ou não validado, cai
+        exatamente no caminho de sempre (nome/código) — fallback, não
+        substituição.
+        """
         code = self.resolver.resolve(raw_code)
         candidates = self.finder.find(raw_name)
+        passcode_card_id = resolve_passcode(self.session, raw_passcode)
+
+        if passcode_card_id is not None:
+            return self._from_passcode(passcode_card_id, candidates, code)
 
         if not candidates and not code.validated:
             return MatchResult(
@@ -165,6 +217,19 @@ class MatchingEngine:
 
         card_id, print_id, card_name = self._pick_target(best, code, agreement)
 
+        candidate_dicts = [candidate.as_dict() for candidate in candidates]
+        if agreement is False and code.card_id is not None:
+            # Conflito de verdade: o código aponta para uma carta que nem
+            # aparece entre os candidatos de nome (`_reconcile`) — sem isto,
+            # a carta certa nunca vira opção na revisão, só as adivinhações
+            # por texto (achado real do usuário).
+            code_card_name = self.session.scalar(
+                select(Card.name).where(Card.id == code.card_id)
+            )
+            candidate_dicts = _ensure_identity_present(
+                candidate_dicts, code.card_id, code_card_name, marker="código"
+            )
+
         return MatchResult(
             card_id=card_id,
             card_print_id=print_id,
@@ -176,7 +241,7 @@ class MatchingEngine:
             margin=margin,
             decision=decision,
             reason=reason,
-            candidates=[candidate.as_dict() for candidate in candidates],
+            candidates=candidate_dicts,
             print_options=self._print_options(card_id, code),
             tier=best.tier,
             agreement=agreement,
@@ -245,6 +310,115 @@ class MatchingEngine:
         if agreement is True:
             return best.card_id, code.print_id, best.name
         return best.card_id, None, best.name
+
+    def _from_passcode(
+        self,
+        passcode_card_id: int,
+        candidates: list[NameCandidate],
+        code: CodeResolution,
+    ) -> MatchResult:
+        """Identidade confirmada por chave exata — a evidência mais forte que
+        existe, mais forte que nome ou set code (pedido do usuário: o
+        passcode é um identificador direto, não uma aproximação fuzzy).
+
+        Conflito de verdade é quando nome ou código, lidos independentemente,
+        apontam para **outra** carta — mesma filosofia de `_reconcile`: duas
+        evidências discordando nunca decidem sozinhas, mesmo com uma delas
+        sendo tão forte quanto o passcode (ele também pode ter sido lido
+        errado, ainda que a validação contra o catálogo torne isso raro).
+        """
+        name_conflict = bool(candidates) and candidates[0].card_id != passcode_card_id
+        code_conflict = code.card_id is not None and code.card_id != passcode_card_id
+        # O código também confirma a mesma carta que o passcode — duas
+        # evidências validadas e independentes concordando. Achado real do
+        # usuário (Dragão Agave, SOFU-PT048): nome ilegível ("D R C GA VF")
+        # casou por acaso com "D/D/D Contract Change" a 85,5% de
+        # similaridade — score alto o bastante para nunca ser filtrado por
+        # um limiar, mas ainda assim ruído de um texto quase sem conteúdo.
+        # Um nome divergente não pode derrubar duas leituras fortes que já
+        # concordam entre si; só um CÓDIGO divergente (evidência tão forte
+        # quanto o passcode) é conflito de verdade aqui.
+        code_confirms = code.card_id is not None and code.card_id == passcode_card_id
+        card_name = self.session.scalar(select(Card.name).where(Card.id == passcode_card_id))
+        real_name_score = candidates[0].score if candidates else 0.0
+
+        if code_conflict or (name_conflict and not code_confirms):
+            data = ConfidenceInput(
+                name_score=real_name_score,
+                code_score=code.score,
+                margin=1.0,
+                agreement=False,
+                has_candidate=True,
+            )
+            confidence = compute_confidence(data, self.thresholds)
+            # O passcode é a evidência mais forte que existe — mesmo em
+            # conflito, ele precisa aparecer como opção na revisão, na
+            # frente dos candidatos de nome (achado real do usuário: Access
+            # Code Talker/Dragão Agave identificados pelo Card ID, mas
+            # ausentes da lista de candidatos, que só mostrava adivinhações
+            # de texto sem nenhuma relação com a carta de verdade).
+            candidate_dicts = _ensure_identity_present(
+                [candidate.as_dict() for candidate in candidates],
+                passcode_card_id,
+                card_name,
+                marker="Card ID",
+            )
+            return MatchResult(
+                card_id=passcode_card_id,
+                card_print_id=None,
+                card_name=card_name,
+                set_code=code.matched_code,
+                name_score=real_name_score,
+                code_score=code.score,
+                confidence=confidence,
+                margin=1.0,
+                decision=Decision.MANUAL,
+                reason="passcode diverge do nome/código lidos",
+                candidates=candidate_dicts,
+                print_options=self._print_options(passcode_card_id, code),
+                tier=candidates[0].tier if candidates else None,
+                agreement=False,
+            )
+
+        # Sem conflito: identidade confirmada por chave exata. Modelado como
+        # `name_score=1.0, agreement=True` de propósito — reaproveita
+        # `compute_confidence`/`decide` (domain/confidence.py, puro, 98%
+        # coberto) em vez de duplicar a lógica de decisão para um segundo
+        # caminho de confiança paralelo. `name_score`/`margin` gravados no
+        # `MatchResult` continuam sendo os valores reais (auditoria) — só o
+        # `ConfidenceInput` usa a substituição. Print/set continuam vindo só
+        # do código: o passcode nunca resolve set/raridade (o mesmo passcode
+        # existe em toda reimpressão da carta).
+        print_id = code.print_id if code.card_id == passcode_card_id else None
+        data = ConfidenceInput(
+            name_score=1.0,
+            code_score=code.score,
+            margin=1.0,
+            agreement=True,
+            has_candidate=True,
+        )
+        confidence = compute_confidence(data, self.thresholds)
+        decision, reason = decide(data, self.thresholds, confidence)
+
+        return MatchResult(
+            card_id=passcode_card_id,
+            card_print_id=print_id,
+            card_name=card_name,
+            set_code=code.matched_code,
+            name_score=real_name_score,
+            code_score=code.score,
+            confidence=confidence,
+            margin=1.0,
+            decision=decision,
+            reason=f"Card ID confirmado — {reason}",
+            candidates=[candidate.as_dict() for candidate in candidates],
+            print_options=self._print_options(passcode_card_id, code),
+            tier=candidates[0].tier if candidates else None,
+            agreement=True,
+            matched_language=code.detected_region
+            or (candidates[0].language if candidates else None),
+            passcode_verified=True,
+        )
 
     def _from_code_only(self, code: CodeResolution) -> MatchResult:
         """Nome ilegível, código válido: o código carrega a identificação."""

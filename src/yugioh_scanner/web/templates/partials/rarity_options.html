@@ -1,0 +1,16 @@
+<div id="rarity-options-{{ item.id }}">
+  {% if rarities %}
+  <select hx-post="/collection/{{ item.id }}/rarity"
+          hx-target="#item-{{ item.id }}" hx-swap="outerHTML"
+          name="rarity" hx-trigger="change">
+    <option value="">escolha a raridade...</option>
+    {% for r in rarities %}
+    <option value="{{ r }}">{{ r }}</option>
+    {% endfor %}
+  </select>
+  {% endif %}
+  <input type="text" name="rarity" placeholder="Raridade não listada (digite)"
+         hx-post="/collection/{{ item.id }}/rarity"
+         hx-target="#item-{{ item.id }}" hx-swap="outerHTML"
+         hx-trigger="keyup[key=='Enter']">
+</div>

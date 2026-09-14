@@ -8,8 +8,9 @@ A ordem das etapas importa e cada uma resolve um problema concreto:
    100% das vezes.
 4. **Downscale** — 12 MP não lê melhor que 1600 px, e custa 5× mais tempo.
 5. **Recorte da carta** — tira o fundo da foto, quando dá para achar a borda.
-6. **ROIs** — o layout da carta é fixo: nome em cima, código embaixo à direita.
-   Rodar OCR só nessas duas faixas é o maior ganho isolado do pipeline.
+6. **ROIs** — o layout da carta é fixo: nome em cima, código embaixo à
+   direita, passcode ("Card ID") embaixo à esquerda. Rodar OCR só nessas
+   faixas é o maior ganho isolado do pipeline.
 
 Limitação assumida: as ROIs são proporcionais e pressupõem a foto enquadrada na
 carta. A detecção de borda da §5 mitiga isso; quando ela não tem confiança,
@@ -65,14 +66,45 @@ class BoundingBox:
 #: Faixa do nome: topo da carta, deixando de fora o ícone de atributo à direita.
 NAME_ROI = BoundingBox(0.04, 0.025, 0.82, 0.115)
 
-#: Faixa do set code: logo abaixo da arte (monstro/spell/trap), acima da caixa
-#: de texto/efeito — não perto do copyright, como a versão anterior assumia
-#: sem checar contra uma foto real. Conferido visualmente contra várias fotos
-#: reais do corpus da Fase 9 (estrutura, booster, carta antiga SDY, monstro
-#: Link) — a posição é a mesma nos quatro estilos de moldura. A versão antiga
-#: media exatamente a caixa de efeito, nunca o código (0% de acerto no corpus
-#: real, plano de idiomas — continuação).
-CODE_ROI = BoundingBox(0.42, 0.69, 0.98, 0.775)
+#: Faixa do set code — a linha impressa logo abaixo da moldura da arte,
+#: rente à borda superior da caixa de texto/efeito (ex.: "RA05-PT058").
+#: **Bug real corrigido** (achado do usuário): a versão anterior
+#: (`0.69`–`0.775`) media uma faixa alta demais — capturava o próprio código
+#: *junto* com a linha de tipo ("[MÁQUINA/LINK/EFEITO]") logo abaixo dela, e
+#: o OCR ora lia uma, ora outra, ora as duas misturadas.
+#:
+#: Calibrado em duas rodadas contra fotos reais: primeiro 2 fotos
+#: (`examples/2026091213*.jpg`, código entre ~70% e ~72,3% da altura), depois
+#: as 10 fotos de `imagens-calibration-cellphone/` (nome de arquivo
+#: `{passcode}-{setcode}.jpg` — o gabarito). A faixa estreita calibrada só
+#: pelas 2 primeiras (0.693-0.735) já falhava em metade das 10 — não por o
+#: código estar em outro lugar, mas porque `detect_card_bounds` não recorta
+#: com a mesma folga em toda foto (a mesma margem física gera uma
+#: porcentagem de altura ligeiramente diferente conforme o quanto a borda
+#: detectada "sobra" em cada foto). Alargada para 0.665-0.76 — folga que
+#: cobre a variação real medida sem devolver a invadir a linha de tipo (10/10
+#: fotos calibradas leem o código limpo depois disso). `tests/factories.py`
+#: desenha o set code sintético na mesma posição — plano de idiomas,
+#: continuação: um ROI corrigido só aqui, sem mexer no gerador de teste,
+#: deixaria a suíte "passando" contra um layout que carta nenhuma tem.
+CODE_ROI = BoundingBox(0.42, 0.665, 0.98, 0.76)
+
+#: Faixa do passcode ("Card ID") — canto inferior-esquerdo, rente à borda
+#: física da carta (mesma linha do copyright "©2020 Studio Dice/...", bem
+#: abaixo da caixa de texto/efeito — **não** a mesma altura do set code,
+#: como a estimativa inicial por mirror horizontal assumia).
+#:
+#: Mesma história do `CODE_ROI`: as 2 fotos iniciais mediram ~95,5%-97,5%,
+#: mas a faixa estreita perdia o passcode em várias das 10 fotos de
+#: calibração (o texto ficava abaixo do limite inferior — de novo, variação
+#: de `detect_card_bounds`, não de posição real). Alargada para 0.90-1.0 —
+#: como não há nada de interesse abaixo do passcode/copyright, dá pra ser
+#: generoso sem risco de invadir outra coisa. Efeito colateral aceito: com a
+#: faixa mais alta, a linha "1ª Edição" abaixo do passcode às vezes entra
+#: junto e o OCR funde as duas numa caixa só — por isso
+#: `domain/passcode.py::clean_passcode` extrai o maior run de dígitos da
+#: leitura em vez de exigir que ela seja só dígitos.
+PASSCODE_ROI = BoundingBox(0.00, 0.90, 0.34, 1.0)
 
 
 class ImageError(YugiohScannerError):
@@ -264,17 +296,21 @@ def prepare_regions(
         width, height = working.size
         name_crop = working.crop(NAME_ROI.to_pixels(width, height))
         code_crop = working.crop(CODE_ROI.to_pixels(width, height))
+        passcode_crop = working.crop(PASSCODE_ROI.to_pixels(width, height))
 
         regions = {
             "name": enhance_for_ocr(name_crop),
             # 2× porque o código é o texto menor da carta.
             "code": enhance_for_ocr(code_crop, upscale=2),
+            # Mesmo tratamento do código: texto igualmente pequeno.
+            "passcode": enhance_for_ocr(passcode_crop, upscale=2),
             # A imagem inteira fica disponível como rede de segurança: se as
             # ROIs não renderem texto, o pipeline tenta nela.
             "full": enhance_for_ocr(working),
         }
         name_crop.close()
         code_crop.close()
+        passcode_crop.close()
         return PreparedImage(
             source=source, width=width, height=height, regions=regions, notes=notes
         )

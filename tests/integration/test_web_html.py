@@ -340,3 +340,46 @@ class TestScanDetailPage:
     def test_404_for_unknown_job_is_handled_cleanly(self, client: TestClient) -> None:
         response = client.get("/scan/999999")
         assert response.status_code == 404
+
+    def test_lists_a_thumbnail_and_the_crop_positioned_for_a_grid_result(
+        self, client: TestClient, catalog: Database
+    ) -> None:
+        """Achado real do usuário: a tabela só mostrava texto — sem ver a
+        carta, dava pra avaliar um erro de OCR. A miniatura reaproveita a
+        mesma técnica de `review.html` (posicionar a foto original via
+        `source_bbox`, sem recortar de verdade no servidor)."""
+        from yugioh_scanner.images.preprocess import BoundingBox
+        from yugioh_scanner.repositories.scans import ScanRepository
+
+        with catalog.session() as session:
+            repo = ScanRepository(session)
+            job = repo.create_job("/fotos", "fake", 1)
+            image = repo.create_image(
+                job.id, file_path="/fotos/grade.jpg", file_hash="h1", file_size=1, status="ok"
+            )
+            repo.create_result(
+                image.id,
+                job_id=job.id,
+                card_id=BLUE_EYES,
+                card_print_id=None,
+                ocr_name_raw="Blue-Eyes White Dragon",
+                ocr_code_raw=None,
+                name_score=1.0,
+                code_score=0.0,
+                confidence=1.0,
+                margin=1.0,
+                candidates=None,
+                decision="auto",
+                crop_index=1,
+                crop_count=4,
+                source_bbox=BoundingBox(left=0.5, top=0.0, right=1.0, bottom=0.5),
+            )
+            session.commit()
+            job_id = job.id
+
+        response = client.get(f"/scan/{job_id}")
+        assert response.status_code == 200
+        assert f'src="/api/v1/scan-images/{image.id}/file"' in response.text
+        assert 'class="photo-wrap thumb cropped"' in response.text
+        # width = 100 / (right - left) = 100 / 0.5 = 200%
+        assert "width: 200.0%" in response.text

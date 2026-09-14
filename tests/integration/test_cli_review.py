@@ -85,6 +85,132 @@ class TestReviewJson:
         assert json.loads(result.stdout) == []
 
 
+class TestReviewSuggestsFromPasscodeWhenNameFails:
+    """Achado real do usuário: nome ilegível pelo OCR (comum em cartas
+    JP/CJK, onde o motor de nome nem tenta com texto curto demais) não pode
+    significar "nenhuma sugestão" quando o passcode sozinho já identificou a
+    carta (`matching/engine.py::_from_passcode`) — antes desta correção, a
+    fila de revisão mostrava candidatos vazios mesmo com a identidade já
+    resolvida, obrigando busca manual do zero."""
+
+    def test_json_includes_a_synthetic_candidate_from_the_passcode(
+        self, tmp_path: Path
+    ) -> None:
+        folder = tmp_path / "cards"
+        make_card_image(folder / "IMG_003.jpg")
+        register_provider(
+            "roteiro-passcode",
+            lambda _settings: FakeOCRProvider(
+                {"IMG_003.jpg": {"name": "X", "passcode": str(BLUE_EYES)}}
+            ),
+        )
+        try:
+            result = runner.invoke(
+                app,
+                [
+                    "scan",
+                    str(folder),
+                    "--workers",
+                    "1",
+                    "--no-auto",
+                    "--provider",
+                    "roteiro-passcode",
+                    "--json",
+                ],
+            )
+            assert result.exit_code == 0, result.output
+        finally:
+            unregister_provider("roteiro-passcode")
+
+        pending = runner.invoke(app, ["review", "--json"])
+        payload = json.loads(pending.stdout)
+        assert len(payload) == 1
+        assert payload[0]["ocr_name"] == "X"  # nome bruto continua visível para auditoria
+        assert payload[0]["candidates"] == [
+            {"card_id": BLUE_EYES, "name": "Blue-Eyes White Dragon", "score": payload[0]["confidence"]}
+        ]
+
+    def test_confirming_the_synthetic_candidate_lands_in_the_collection(
+        self, tmp_path: Path
+    ) -> None:
+        """A sugestão sintética precisa ser aceitável de verdade pelo laço
+        interativo (`run_interactive_review`), não só aparecer no `--json`."""
+        folder = tmp_path / "cards"
+        make_card_image(folder / "IMG_004.jpg")
+        register_provider(
+            "roteiro-passcode-2",
+            lambda _settings: FakeOCRProvider(
+                {"IMG_004.jpg": {"name": "X", "passcode": str(BLUE_EYES)}}
+            ),
+        )
+        try:
+            scan_result = runner.invoke(
+                app,
+                [
+                    "scan",
+                    str(folder),
+                    "--workers",
+                    "1",
+                    "--no-auto",
+                    "--provider",
+                    "roteiro-passcode-2",
+                    "--json",
+                ],
+            )
+            assert scan_result.exit_code == 0, scan_result.output
+        finally:
+            unregister_provider("roteiro-passcode-2")
+
+        result = runner.invoke(app, ["review"], input="1\n")
+        assert result.exit_code == 0, result.output
+
+        collection = runner.invoke(app, ["collection", "list", "--json"])
+        items = json.loads(collection.stdout)
+        assert len(items) == 1
+        assert items[0]["card_name"] == "Blue-Eyes White Dragon"
+
+    def test_passcode_clean_strips_ocr_junk_glued_to_the_edition_line(
+        self, tmp_path: Path
+    ) -> None:
+        """Achado real do usuário: a ROI do passcode precisa de folga
+        vertical (calibração contra fotos de celular), e essa folga às vezes
+        pega a linha "1ª Edição" junto — o OCR funde as duas numa caixa só
+        (`domain/passcode.py::clean_passcode` já extrai o número certo para o
+        *matching*; este teste garante que o campo exibido na revisão também
+        mostra o valor limpo, não o texto bruto com letras coladas)."""
+        folder = tmp_path / "cards"
+        make_card_image(folder / "IMG_005.jpg")
+        register_provider(
+            "roteiro-passcode-3",
+            lambda _settings: FakeOCRProvider(
+                {"IMG_005.jpg": {"name": "X", "passcode": f"{BLUE_EYES} 1Edicao"}}
+            ),
+        )
+        try:
+            result = runner.invoke(
+                app,
+                [
+                    "scan",
+                    str(folder),
+                    "--workers",
+                    "1",
+                    "--no-auto",
+                    "--provider",
+                    "roteiro-passcode-3",
+                    "--json",
+                ],
+            )
+            assert result.exit_code == 0, result.output
+        finally:
+            unregister_provider("roteiro-passcode-3")
+
+        pending = runner.invoke(app, ["review", "--json"])
+        payload = json.loads(pending.stdout)
+        assert len(payload) == 1
+        assert payload[0]["ocr_passcode"] == f"{BLUE_EYES} 1Edicao"  # bruto, para auditoria
+        assert payload[0]["passcode_clean"] == str(BLUE_EYES)  # limpo, para exibição/uso
+
+
 class TestReviewInteractive:
     def test_confirming_the_top_candidate_lands_in_the_collection(self, cards_folder: Path) -> None:
         scan_no_auto(cards_folder)

@@ -16,11 +16,23 @@
 
 <figure>
 <table>
-  <thead><tr><th>Texto OCR</th><th>Código</th><th>Recorte</th><th>Decisão</th><th>Confiança</th><th>Aplicado</th></tr></thead>
+  <thead><tr><th>Foto</th><th>Texto OCR</th><th>Código</th><th>Recorte</th><th>Decisão</th><th>Confiança</th><th>Aplicado</th></tr></thead>
   <tbody>
     {% for r in results %}
     {% set is_group_start = loop.previtem is defined and loop.previtem.scan_image_id != r.scan_image_id %}
+    {% set cropped = r.crop_count > 1 and r.source_bbox %}
     <tr{% if is_group_start %} class="group-start"{% endif %}>
+      <td>
+        <div class="photo-wrap thumb{% if cropped %} cropped{% endif %}">
+          <img class="roi" loading="lazy" alt="{{ r.card_name or r.ocr_name_raw or 'carta escaneada' }}"
+               src="/api/v1/scan-images/{{ r.scan_image_id }}/file"
+               {%- if cropped %}
+               {%- set bw = r.source_bbox.right - r.source_bbox.left %}
+               {%- set bh = r.source_bbox.bottom - r.source_bbox.top %}
+               style="width: {{ (100 / bw)|round(2) }}%; height: {{ (100 / bh)|round(2) }}%; left: {{ (-100 * r.source_bbox.left / bw)|round(2) }}%; top: {{ (-100 * r.source_bbox.top / bh)|round(2) }}%;"
+               {%- endif %}>
+        </div>
+      </td>
       <td>{{ r.ocr_name_raw or "—" }}</td>
       <td>{{ r.ocr_code_raw or "—" }}</td>
       <td>{{ "%d/%d"|format(r.crop_index + 1, r.crop_count) if r.crop_count > 1 else "—" }}</td>

@@ -6,6 +6,7 @@ from __future__ import annotations
 from typing import Any
 
 from ..db.tables import Card, CardPrint, CardSet, CollectionItem, ScanJob, ScanResult
+from ..domain.passcode import clean_passcode
 
 
 def job_to_dict(job: ScanJob) -> dict[str, Any]:
@@ -32,10 +33,29 @@ def result_to_dict(result: ScanResult, *, with_image: bool = True) -> dict[str, 
         "id": result.id,
         "scan_image_id": result.scan_image_id,
         "card_id": result.card_id,
+        # Nome já resolvido, mesmo quando `candidates` está vazio (nome
+        # ilegível pelo OCR — comum em JP/CJK — mas passcode/código sozinhos
+        # já identificaram a carta). A revisão usa isto para sugerir a carta
+        # em vez de mostrar "nenhum candidato" quando o sistema já sabe.
+        "card_name": result.card_name,
         "card_print_id": result.card_print_id,
         "detected_language": result.detected_language,
         "ocr_name_raw": result.ocr_name_raw,
         "ocr_code_raw": result.ocr_code_raw,
+        "ocr_passcode_raw": result.ocr_passcode_raw,
+        # Versão limpa (só os dígitos, sem "1ª Edição"/copyright colado pelo
+        # OCR — `domain/passcode.py::clean_passcode`) para a revisão mostrar
+        # em vez do texto bruto, que confunde ("por que tem letra no Card ID
+        # se ele só pode ser número?" — achado real do usuário).
+        "passcode_clean": clean_passcode(result.ocr_passcode_raw),
+        # A identidade veio do passcode ("Card ID") validado contra o
+        # catálogo — a fonte mais forte que existe, mais forte que nome ou
+        # set code. A revisão mostra um selo quando isto é `True`.
+        "passcode_verified": result.passcode_verified,
+        # Código já validado contra o catálogo — a revisão usa isto para
+        # pré-selecionar o set no seletor em cascata mesmo quando
+        # `card_print_id` ficou `None` por ambiguidade de raridade.
+        "matched_set_code": result.matched_set_code,
         "name_score": round(result.name_score, 4),
         "code_score": round(result.code_score, 4),
         "confidence": round(result.confidence, 4),
@@ -113,8 +133,11 @@ def item_to_dict(item: CollectionItem) -> dict[str, Any]:
         "card_id": item.card_id,
         "card_name": item.card.name,
         "card_print_id": item.card_print_id,
-        "set_code": item.card_print.set_code_full if item.card_print else None,
-        "rarity": item.card_print.rarity if item.card_print else None,
+        "set_code": item.set_code_full_display,
+        "rarity": item.rarity_display,
+        # `True` só quando o print está totalmente resolvido — um set
+        # conhecido com raridade pendente ainda aparece como incompleto.
+        "rarity_pending": item.card_print_id is None and item.set_code_full is not None,
         "quantity": item.quantity,
         "condition": item.condition,
         "edition": item.edition,

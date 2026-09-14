@@ -23,7 +23,19 @@
     <label><input type="checkbox" name="auto" checked> Adicionar automaticamente (confiança alta)</label>
     <label><input type="checkbox" name="reprocess"> Reprocessar imagens já vistas</label>
     <label><input type="checkbox" name="grid"> Detectar várias cartas por foto (grade)</label>
+    <label><input type="checkbox" name="require_set" checked> Exigir set para automático</label>
+    <label><input type="checkbox" name="require_rarity"> Exigir raridade para automático</label>
   </div>
+  <p class="kbd-hint">
+    Com "exigir set" marcado, uma leitura só entra sozinha na coleção quando o
+    set também foi identificado — sem isso, mesmo um nome de alta confiança
+    vira pendência para confirmar manualmente, preservando a foto de origem.
+    "Exigir raridade" é mais rígido: mesmo com o set 100% identificado, se
+    houver 2+ raridades catalogadas para ele (raridade ainda ambígua), a
+    leitura também vira pendência — desmarcado (padrão), o item já entra na
+    coleção com o set certo e a raridade pendente, resolvível depois em
+    "Coleção".
+  </p>
   <label>Layout da grade (opcional)
     <input type="text" name="grid_size" id="grid-size-input" placeholder="ex.: 3x3">
   </label>
@@ -223,6 +235,8 @@ form.addEventListener("submit", async (e) => {
     reprocess: form.reprocess.checked,
     grid: form.grid.checked,
     grid_size: form.grid_size.value.trim() || null,
+    require_set: form.require_set.checked,
+    require_rarity: form.require_rarity.checked,
   };
   const res = await fetch("/api/v1/scans", {
     method: "POST",
@@ -248,7 +262,12 @@ form.addEventListener("submit", async (e) => {
     if (data.skipped) { skipped++; logLine(`${label}: já processada, pulada`); }
     else {
       processed++;
-      if (data.decision === "auto" && data.applied) autoAdded++;
+      // Conta pela decisão do motor (igual à linha do log logo abaixo), não
+      // por `applied` — um recorte `--reprocess` já aplicado antes decide
+      // `auto` mas não escreve de novo (`applied=false`); contar por
+      // `applied` jogava esses recortes para "pendentes" mesmo sem
+      // precisarem de revisão nenhuma.
+      if (data.decision === "auto") autoAdded++;
       else if (data.status !== "ok") failed++;
       else pending++;
       logLine(`${label}: ${data.name || data.ocr_name || "?"} [${data.decision || data.status}]`);
@@ -259,7 +278,7 @@ form.addEventListener("submit", async (e) => {
   source.addEventListener("done", (ev) => {
     const data = JSON.parse(ev.data);
     progressBar.value = 100; progressBar.max = 100;
-    progressCounts.textContent = `Concluído: ${data.processed} processadas, ${data.auto_added} auto, ${data.pending} pendentes, ${data.failed} falhas.`;
+    progressCounts.textContent = `Concluído: ${data.processed} processadas, ${data.auto_added} auto, ${data.pending} pendentes, ${data.failed} falhas, ${data.skipped_empty || 0} células vazias ignoradas.`;
     if (data.job_id) logLine(`Job #${data.job_id} salvo.`);
     source.close();
   });

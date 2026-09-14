@@ -139,6 +139,10 @@ class ScanStartBody(BaseModel):
     #: contorno (que não é confiável em fotos reais, ADR 0011). Informar isto
     #: já liga o modo grade sozinho, não precisa marcar `grid` também.
     grid_size: str | None = None
+    #: `None` = usa `Settings.auto_requires_print` (ativado por padrão).
+    require_set: bool | None = None
+    #: `None` = usa `Settings.auto_requires_rarity` (desligado por padrão).
+    require_rarity: bool | None = None
 
 
 @router.post("/scans")
@@ -166,6 +170,8 @@ async def start_scan(
         reprocess=body.reprocess,
         grid=body.grid,
         grid_size=grid_size,
+        require_set=body.require_set,
+        require_rarity=body.require_rarity,
     )
     return {"run_id": run.run_id, "status": "started"}
 
@@ -254,6 +260,12 @@ def get_scan_result(result_id: int, scans: ScanServiceDep) -> dict[str, Any]:
 class ConfirmBody(BaseModel):
     card_id: int
     card_print_id: int | None = None
+    #: Set escolhido no seletor em cascata quando `card_print_id` é `None`
+    #: (raridade ainda pendente/não catalogada).
+    set_code_full: str | None = None
+    #: Raridade digitada livremente quando nenhuma das catalogadas bate —
+    #: só junto de `set_code_full`, nunca junto de `card_print_id`.
+    rarity_override: str | None = None
     quantity: int = Field(default=1, ge=1)
     #: Idioma da carta física escolhido na revisão. Omitido, o serviço cai
     #: para o idioma que o matching detectou sozinho (`ScanResult.detected_language`).
@@ -266,6 +278,8 @@ def confirm_scan_result(result_id: int, body: ConfirmBody, scans: ScanServiceDep
         result_id,
         card_id=body.card_id,
         card_print_id=body.card_print_id,
+        set_code_full=body.set_code_full,
+        rarity_override=body.rarity_override,
         quantity=body.quantity,
         language=body.language,
     )
@@ -287,6 +301,7 @@ def list_collection(
     search: str | None = None,
     set: str | None = None,
     no_set: bool = False,
+    no_rarity: bool = False,
     sort: str = "name",
     desc: bool = False,
     limit: int = Query(100, ge=1, le=500),
@@ -296,6 +311,7 @@ def list_collection(
         search=search,
         set_prefix=set,
         no_set=no_set,
+        no_rarity=no_rarity,
         sort=sort,
         descending=desc,
         limit=limit,
@@ -311,6 +327,10 @@ class CollectionAddBody(BaseModel):
     #: sabe o `id` exato do print escolhido (veio de `/api/v1/cards/{id}`) e
     #: não precisa reabrir a resolução por código.
     card_print_id: int | None = None
+    #: Desempata `set_code` ambíguo (2+ raridades catalogadas). Se não bater
+    #: com nenhuma catalogada, o item entra com o set conhecido e a raridade
+    #: como texto pendente em vez de erro.
+    rarity: str | None = None
     quantity: int = Field(default=1, ge=1)
     condition: str = "Near Mint"
     edition: str = "Unlimited"
@@ -326,6 +346,7 @@ def add_collection_item(
         body.name,
         set_code=body.set_code,
         card_print_id=body.card_print_id,
+        rarity=body.rarity,
         quantity=body.quantity,
         condition=body.condition,
         edition=body.edition,
@@ -336,13 +357,16 @@ def add_collection_item(
 
 
 class CollectionPatchBody(BaseModel):
-    """Só os campos que a tela `/collection` de fato edita inline (plano §10.4):
-    quantidade e o set de um item indefinido. `condition`/`edition`/`language`
+    """Campos que a tela `/collection` edita inline (plano §10.4): quantidade,
+    o set de um item indefinido, e agora a raridade (deixou de fazer parte da
+    chave lógica ambígua que motivava a restrição original — set e raridade
+    são desacoplados). `condition`/`edition`/`language` continuam de fora:
     exigiriam decidir como fundir com uma linha já existente na chave nova —
     fora do que a tela pede; ver docs/PLAN.md para a nota completa."""
 
     quantity: int | None = Field(default=None, ge=0)
     set_code: str | None = None
+    rarity: str | None = None
     notes: str | None = None
 
 
@@ -356,6 +380,8 @@ def patch_collection_item(
             return {"id": item_id, "removed": True}
     if body.set_code is not None:
         collection.resolve_print_by_code(item_id, body.set_code)
+    if body.rarity is not None:
+        collection.resolve_rarity(item_id, body.rarity)
     if body.notes is not None:
         collection.set_notes(item_id, body.notes)
     return item_to_dict(collection.get_item(item_id))

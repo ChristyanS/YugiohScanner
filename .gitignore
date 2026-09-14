@@ -6,6 +6,7 @@ data/
 *.db
 *.db-wal
 *.db-shm
+tests/fixtures/_calibration_scratch/
 
 # python
 __pycache__/
@@ -23,6 +24,10 @@ dist/
 .coverage
 htmlcov/
 coverage.xml
+
+# fotos avulsas de depuração (não são fixture de teste)
+/examples/
+/imagens-test/
 
 # editores / SO
 .vscode/

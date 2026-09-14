@@ -15,9 +15,12 @@
     <p id="crop-label" class="crop-label" hidden></p>
     <p><strong>OCR — nome:</strong> <span id="ocr-name"></span></p>
     <p><strong>OCR — código:</strong> <span id="ocr-code"></span></p>
+    <p><strong>OCR — Card ID:</strong> <span id="ocr-passcode"></span></p>
+    <p id="passcode-badge" class="selected-label" hidden>✓ identificado pelo Card ID — sinal mais confiável que nome/código</p>
   </div>
   <div>
     <h3>Candidatos</h3>
+    <p id="candidates-hint" class="kbd-hint" hidden>Nome não identificado pelo OCR — a sugestão abaixo vem do Card ID/set code lido.</p>
     <ul id="candidates" class="candidate-list"></ul>
 
     <details id="manual-search">
@@ -35,6 +38,10 @@
       </label>
       <small id="print-count"></small>
       <small id="print-auto-hint" hidden>Set detectado automaticamente pelo código lido.</small>
+      <label id="rarity-unlisted-wrap" hidden>
+        <input type="checkbox" id="rarity-unlisted-check"> Raridade real não está nesta lista
+      </label>
+      <input type="text" id="rarity-unlisted-input" placeholder="Digite a raridade impressa na carta" hidden>
     </div>
 
     <label>Idioma da carta física
@@ -76,7 +83,10 @@ const photoWrap = document.getElementById("photo-wrap");
 const cropLabel = document.getElementById("crop-label");
 const ocrName = document.getElementById("ocr-name");
 const ocrCode = document.getElementById("ocr-code");
+const ocrPasscode = document.getElementById("ocr-passcode");
+const passcodeBadge = document.getElementById("passcode-badge");
 const candidatesEl = document.getElementById("candidates");
+const candidatesHint = document.getElementById("candidates-hint");
 const printSection = document.getElementById("print-section");
 const printSearch = document.getElementById("print-search");
 const printSelect = document.getElementById("print-select");
@@ -90,7 +100,14 @@ const manualSearchDetails = document.getElementById("manual-search");
 const manualSearchInput = document.getElementById("manual-search-input");
 const manualSearchResults = document.getElementById("manual-search-results");
 const selectedLabel = document.getElementById("selected-label");
+const rarityUnlistedWrap = document.getElementById("rarity-unlisted-wrap");
+const rarityUnlistedCheck = document.getElementById("rarity-unlisted-check");
+const rarityUnlistedInput = document.getElementById("rarity-unlisted-input");
 let manualSearchTimer = null;
+//: Set já identificado (pelo código lido) mesmo quando a raridade ainda não
+//: foi escolhida — permite gravar "sei o set, raridade pendente" em vez de
+//: perder o set inteiro quando a raridade real não está catalogada.
+let resolvedSetCode = null;
 
 function showError(message) {
   errorBox.innerHTML = message ? `<div class="error-box">${message}</div>` : "";
@@ -160,14 +177,25 @@ function render() {
   updateCropOverlay(r);
   ocrName.textContent = r.ocr_name_raw || "(vazio)";
   ocrCode.textContent = r.ocr_code_raw || "(vazio)";
+  // Prefere a versão limpa (só dígitos — `domain/passcode.py::clean_passcode`)
+  // à leitura bruta: o passcode só pode ser número, e o bruto às vezes vem
+  // colado com "1ª Edição"/copyright (achado real: a ROI precisa de folga
+  // vertical, e essa folga pega a linha de baixo em algumas fotos).
+  ocrPasscode.textContent = r.passcode_clean || r.ocr_passcode_raw || "(vazio)";
+  passcodeBadge.hidden = !r.passcode_verified;
   quantityInput.value = 1;
   selectedCandidate = null;
   selectedPrint = null;
   currentPrints = [];
+  resolvedSetCode = null;
   printSection.hidden = true;
   printSelect.innerHTML = "";
   printSearch.value = "";
   printCount.textContent = "";
+  rarityUnlistedWrap.hidden = true;
+  rarityUnlistedCheck.checked = false;
+  rarityUnlistedInput.hidden = true;
+  rarityUnlistedInput.value = "";
   manualSearchDetails.open = false;
   manualSearchInput.value = "";
   manualSearchResults.innerHTML = "";
@@ -177,8 +205,22 @@ function render() {
   languageSelect.value = r.detected_language || "EN";
   languageHint.hidden = true;
 
+  // O nome pode não render candidato nenhum (comum em cartas JP/CJK — o
+  // motor de nome nem tenta com texto curto demais) e ainda assim a
+  // identidade já ser conhecida via passcode/código sozinhos
+  // (`matching/engine.py::_from_passcode`/`_from_code_only`). Sem isto a
+  // revisão mostrava "nenhum candidato" para uma leitura que o sistema já
+  // sabia resolver — obrigando busca manual do zero (achado real do
+  // usuário: Access Code Talker japonês, nome lido como "力 厚", passcode
+  // batido, revisão sem sugestão nenhuma).
+  const hasRealCandidates = !!(r.candidates && r.candidates.length);
+  const effectiveCandidates = hasRealCandidates
+    ? r.candidates
+    : (r.card_id ? [{ card_id: r.card_id, name: r.card_name || `Carta #${r.card_id}`, score: r.confidence }] : []);
+  candidatesHint.hidden = hasRealCandidates || !effectiveCandidates.length;
+
   candidatesEl.innerHTML = "";
-  (r.candidates || []).slice(0, 5).forEach((c, i) => {
+  effectiveCandidates.slice(0, 5).forEach((c, i) => {
     const li = document.createElement("li");
     li.dataset.index = i;
     li.innerHTML = `<img class="thumb" src="/api/v1/cards/${c.card_id}/image?size=small" loading="lazy" alt="">
@@ -186,7 +228,10 @@ function render() {
     li.addEventListener("click", () => selectCandidate(i));
     candidatesEl.appendChild(li);
   });
-  if (r.candidates && r.candidates.length) selectCandidate(0);
+  if (effectiveCandidates.length) {
+    r.candidates = effectiveCandidates; // reaproveita selectCandidate() sem duplicar lógica
+    selectCandidate(0);
+  }
 }
 
 function clearSelectionHighlight() {
@@ -283,12 +328,19 @@ async function selectCard(cardId, candidate) {
     printSearch.value = codeMatches[0].set_code;
     renderPrintOptions(codeMatches[0].set_code);
   }
+  // O set já está identificado pelo código, com raridade resolvida (1 match)
+  // ou pendente entre catalogadas (2+) — ambos os casos guardam o set para
+  // que "raridade não catalogada" ainda não perca essa informação.
+  resolvedSetCode = codeMatches.length ? codeMatches[0].set_code : null;
+  rarityUnlistedWrap.hidden = !resolvedSetCode;
   printSelect.value = auto;
   selectedPrint = auto || null;
   printAutoHint.hidden = !auto;
   printSelect.onchange = () => {
     selectedPrint = printSelect.value || null;
     printAutoHint.hidden = true;
+    rarityUnlistedCheck.checked = false;
+    rarityUnlistedInput.hidden = true;
   };
   // Se a carta física já foi detectada num idioma que tem print distinto no
   // catálogo (ADR 0009/0012 — ver `matching/print_language.py`), troca a
@@ -308,6 +360,16 @@ function applyLanguageFilter() {
     // trocava por outro set qualquer (ex. DUOV-PT029) só por também ser PT.
     const chosen = currentPrints.find((p) => String(p.id) === selectedPrint);
     if (chosen && chosen.region === lang) return;
+  } else if (resolvedSetCode) {
+    // Mesma classe de bug acima, achada de novo por outra porta: quando o
+    // código bate mas a raridade é ambígua (2+ catalogadas), `selectedPrint`
+    // fica vazio de propósito (ninguém escolheu ainda) — mas o SET já é
+    // conhecido. Sem esta guarda, o fallback abaixo pegava "qualquer print
+    // deste card neste idioma" e trocava por um set completamente diferente
+    // (achado real: Cavaleiro Mecânico RA05-PT058 virava SUDA-PT050; Saruya
+    // RA05-PT043 virava EXFO-PT048 — nenhum dos dois tem relação com o
+    // código lido, só compartilham carta e idioma PT).
+    return;
   }
   const match = currentPrints.find((p) => p.region === lang);
   if (match) {
@@ -325,6 +387,15 @@ function applyLanguageFilter() {
 }
 
 languageSelect.addEventListener("change", applyLanguageFilter);
+
+rarityUnlistedCheck.addEventListener("change", () => {
+  rarityUnlistedInput.hidden = !rarityUnlistedCheck.checked;
+  if (rarityUnlistedCheck.checked) {
+    printSelect.value = "";
+    selectedPrint = null;
+    rarityUnlistedInput.focus();
+  }
+});
 
 async function runManualSearch(query) {
   if (!query.trim()) { manualSearchResults.innerHTML = ""; return; }
@@ -353,15 +424,29 @@ manualSearchInput.addEventListener("input", () => {
 async function confirmCurrent() {
   const r = current();
   if (!r || !selectedCandidate) { showError("Escolha um candidato."); return; }
+  const rarityUnlisted = !rarityUnlistedWrap.hidden && rarityUnlistedCheck.checked;
+  if (rarityUnlisted && !rarityUnlistedInput.value.trim()) {
+    showError("Digite a raridade, ou desmarque a opção.");
+    return;
+  }
+  const body = {
+    card_id: selectedCandidate.card_id,
+    card_print_id: selectedPrint ? parseInt(selectedPrint, 10) : null,
+    quantity: parseInt(quantityInput.value, 10) || 1,
+    language: languageSelect.value,
+  };
+  if (rarityUnlisted) {
+    // Set conhecido, raridade real não catalogada: grava os dois como
+    // pendentes em vez de um card_print_id inventado (`CollectionItem
+    // .set_code_full`/`.rarity` — set e raridade desacoplados).
+    body.card_print_id = null;
+    body.set_code_full = resolvedSetCode;
+    body.rarity_override = rarityUnlistedInput.value.trim();
+  }
   const res = await fetch(`/api/v1/scan-results/${r.id}/confirm`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      card_id: selectedCandidate.card_id,
-      card_print_id: selectedPrint ? parseInt(selectedPrint, 10) : null,
-      quantity: parseInt(quantityInput.value, 10) || 1,
-      language: languageSelect.value,
-    }),
+    body: JSON.stringify(body),
   });
   const payload = await res.json();
   if (!res.ok) { showError(payload.error || "Falha ao confirmar"); return; }

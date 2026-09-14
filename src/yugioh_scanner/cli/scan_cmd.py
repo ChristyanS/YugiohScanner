@@ -79,6 +79,26 @@ def scan_command(
     no_auto: bool = typer.Option(
         False, "--no-auto", help="Nada é adicionado sozinho; tudo vira pendente."
     ),
+    require_set: bool = typer.Option(
+        None,
+        "--require-set/--allow-no-set-auto",
+        help=(
+            "Exige set resolvido para AUTO (padrão: YGS_AUTO_REQUIRES_PRINT, "
+            "que já vem ativado). --allow-no-set-auto volta ao comportamento antigo: "
+            "nome de alta confiança basta, mesmo sem set."
+        ),
+    ),
+    require_rarity: bool = typer.Option(
+        None,
+        "--require-rarity/--allow-no-rarity-auto",
+        help=(
+            "Exige raridade exata (não só o set) para AUTO — padrão: "
+            "YGS_AUTO_REQUIRES_RARITY, desligado. Com o set validado mas 2+ "
+            "raridades catalogadas, o item entra com set conhecido e raridade "
+            "pendente (resolvível depois em `collection set-rarity`) a menos "
+            "que você ligue isto."
+        ),
+    ),
     reprocess: bool = typer.Option(
         False,
         "--reprocess",
@@ -135,6 +155,8 @@ def scan_command(
             limit=limit,
             apply=apply,
             no_auto=no_auto,
+            require_set=require_set,
+            require_rarity=require_rarity,
             reprocess=reprocess,
             grid=grid,
             grid_size=parsed_grid_size,
@@ -155,6 +177,8 @@ def _run_scan_and_render(
     limit: int | None = None,
     apply: bool = True,
     no_auto: bool = False,
+    require_set: bool | None = None,
+    require_rarity: bool | None = None,
     reprocess: bool = False,
     grid: bool = False,
     grid_size: tuple[int, int] | None = None,
@@ -170,6 +194,8 @@ def _run_scan_and_render(
         "limit": limit,
         "apply": apply,
         "no_auto": no_auto,
+        "require_set": require_set,
+        "require_rarity": require_rarity,
         "reprocess": reprocess,
         "grid": grid,
         "grid_size": grid_size,
@@ -263,19 +289,29 @@ def _render(report: ScanRunReport, *, as_json: bool, apply: bool) -> None:
         "imagens encontradas": report.total_images,
         "já processadas (puladas)": report.skipped,
         "processadas agora": report.processed,
-        "adicionadas automaticamente": report.auto_added,
+        "identificadas automaticamente": report.auto_added,
         "aguardando revisão": report.pending,
         "com falha": report.failed,
+        "células vazias ignoradas": report.skipped_empty,
         "tempo": f"{report.elapsed_s:.1f}s",
     }
+    if report.already_applied:
+        summary["já estavam na coleção (--reprocess)"] = report.already_applied
     if report.job_id is not None:
         summary["job"] = report.job_id
     print_key_values("Resumo", summary)
 
     if not apply:
         warn("Modo --dry-run: nada foi gravado no banco.")
-    elif report.auto_added:
-        success(f"{report.auto_added} carta(s) adicionada(s) à coleção.")
+    else:
+        newly_added = report.auto_added - report.already_applied
+        if newly_added:
+            success(f"{newly_added} carta(s) adicionada(s) à coleção.")
+        if report.already_applied:
+            console.print(
+                f"{report.already_applied} carta(s) identificada(s) automaticamente já "
+                "estavam na coleção (--reprocess não soma de novo)."
+            )
     if report.pending:
         warn(f"{report.pending} leitura(s) aguardando revisão — rode `yugioh-scanner review`.")
 

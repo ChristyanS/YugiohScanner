@@ -16,7 +16,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, ClassVar
 
-from sqlalchemy import exists, or_, select
+from sqlalchemy import and_, exists, or_, select
 from sqlalchemy.orm import Session
 
 from ..db.tables import (
@@ -39,6 +39,11 @@ class CollectionKey:
 
     card_id: int
     card_print_id: int | None = None
+    #: Set já identificado sem print/raridade resolvidos — só faz sentido
+    #: junto de `card_print_id=None` (ver `CollectionItem.set_code_full`).
+    set_code_full: str | None = None
+    #: Raridade pendente/manual — mesma condição de `set_code_full`.
+    rarity: str | None = None
     condition: str = DEFAULT_CONDITION
     edition: str = DEFAULT_EDITION
     language: str = DEFAULT_LANGUAGE
@@ -66,6 +71,16 @@ class CollectionRepository:
             CollectionItem.card_print_id.is_(None)
             if key.card_print_id is None
             else CollectionItem.card_print_id == key.card_print_id
+        )
+        stmt = stmt.where(
+            CollectionItem.set_code_full.is_(None)
+            if key.set_code_full is None
+            else CollectionItem.set_code_full == key.set_code_full
+        )
+        stmt = stmt.where(
+            CollectionItem.rarity.is_(None)
+            if key.rarity is None
+            else CollectionItem.rarity == key.rarity
         )
         return self.session.scalars(stmt).first()
 
@@ -120,6 +135,8 @@ class CollectionRepository:
         item = CollectionItem(
             card_id=key.card_id,
             card_print_id=key.card_print_id,
+            set_code_full=key.set_code_full,
+            rarity=key.rarity,
             quantity=quantity,
             condition=key.condition,
             edition=key.edition,
@@ -188,6 +205,24 @@ class CollectionRepository:
         self.session.flush()
         return item
 
+    def set_rarity(self, item_id: int, rarity: str | None) -> CollectionItem:
+        """Grava a raridade "pendente" (texto livre, sem print resolvido).
+
+        Só se aplica a itens com `card_print_id IS NULL` — uma vez que o
+        print está resolvido, a raridade vem dele (`rarity_display`); usar
+        `CollectionService.resolve_rarity` quando a raridade escolhida bater
+        com uma das catalogadas, para resolver o print de verdade em vez de
+        só anotar o texto.
+        """
+        item = self.get(item_id)
+        if item is None:
+            raise CollectionItemNotFoundError(item_id)
+
+        item.rarity = rarity
+        item.updated_at = utcnow()
+        self.session.flush()
+        return item
+
     def set_print(self, item_id: int, card_print_id: int) -> CollectionItem:
         """Resolve manualmente o set de um item que estava `NULL` (plano §11.4).
 
@@ -215,6 +250,10 @@ class CollectionRepository:
             return target
 
         item.card_print_id = card_print_id
+        # Print resolvido de verdade: os campos "pendente" deixam de fazer
+        # sentido (a leitura passa a vir de `card_print` via `*_display`).
+        item.set_code_full = None
+        item.rarity = None
         item.updated_at = utcnow()
         self.session.flush()
         # Regressão: `flush()` grava a coluna FK, mas a relação `card_print`
@@ -254,6 +293,7 @@ class CollectionRepository:
         search: str | None = None,
         set_prefix: str | None = None,
         no_set: bool = False,
+        no_rarity: bool = False,
         sort: str = "name",
         descending: bool = False,
         limit: int | None = None,
@@ -292,6 +332,20 @@ class CollectionRepository:
             stmt = stmt.where(CardPrint.set_prefix == set_prefix.strip().upper())
         if no_set:
             stmt = stmt.where(CollectionItem.card_print_id.is_(None))
+        if no_rarity:
+            # Só faz sentido quando o set já é conhecido: ou o print está
+            # resolvido mas sem raridade catalogada, ou o print está
+            # pendente (`set_code_full` preenchido) e a raridade também.
+            stmt = stmt.where(
+                or_(
+                    and_(CollectionItem.card_print_id.is_not(None), CardPrint.rarity.is_(None)),
+                    and_(
+                        CollectionItem.card_print_id.is_(None),
+                        CollectionItem.set_code_full.is_not(None),
+                        CollectionItem.rarity.is_(None),
+                    ),
+                )
+            )
 
         column = self.SORT_COLUMNS.get(sort, Card.name)
         stmt = stmt.order_by(column.desc() if descending else column.asc())

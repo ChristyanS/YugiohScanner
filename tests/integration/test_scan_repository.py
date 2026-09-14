@@ -84,6 +84,56 @@ class TestHashIdempotency:
         assert image.ocr_ms == 42
 
 
+class TestResultsForJob:
+    """`GET /scan/{id}` (achado real do usuário): a mesma `ScanImage`
+    reaparece em jobs diferentes (--reprocess, ou qualquer novo scan de uma
+    pasta já vista), e cada job precisa ver só os `ScanResult` que ele
+    mesmo produziu — não só os do job que descobriu o arquivo primeiro."""
+
+    def test_scopes_by_the_job_that_produced_the_result(self, session: Session) -> None:
+        repo = ScanRepository(session)
+        card = make_card(session)
+        first_job = repo.create_job("/x", "fake", 1)
+        image = repo.create_image(
+            first_job.id, file_path="/x/a.jpg", file_hash="h", file_size=1, status="ok"
+        )
+        repo.create_result(
+            image.id,
+            job_id=first_job.id,
+            card_id=card.id,
+            card_print_id=None,
+            ocr_name_raw="X",
+            ocr_code_raw=None,
+            name_score=1.0,
+            code_score=0.0,
+            confidence=1.0,
+            margin=1.0,
+            candidates=None,
+            decision="auto",
+        )
+
+        # --reprocess: mesma `ScanImage` (achada pelo hash, `job_id` original
+        # intacto), mas um `ScanResult` novo pertence ao job **atual**.
+        second_job = repo.create_job("/x", "fake", 1)
+        repo.create_result(
+            image.id,
+            job_id=second_job.id,
+            card_id=card.id,
+            card_print_id=None,
+            ocr_name_raw="X",
+            ocr_code_raw=None,
+            name_score=1.0,
+            code_score=0.0,
+            confidence=1.0,
+            margin=1.0,
+            candidates=None,
+            decision="auto",
+        )
+
+        assert len(repo.results_for_job(first_job.id)) == 1
+        assert len(repo.results_for_job(second_job.id)) == 1
+
+
 class TestApplicationGuard:
     """`has_applied_result` é o que impede `--reprocess` de duplicar quantidade."""
 
@@ -104,6 +154,7 @@ class TestApplicationGuard:
         )
         repo.create_result(
             image.id,
+            job_id=job.id,
             card_id=card.id,
             card_print_id=None,
             ocr_name_raw="X",
@@ -130,6 +181,7 @@ class TestApplicationGuard:
 
         result = repo.create_result(
             image.id,
+            job_id=job.id,
             card_id=card.id,
             card_print_id=None,
             ocr_name_raw="X",
@@ -157,6 +209,7 @@ class TestPendingQueue:
         )
         repo.create_result(
             image.id,
+            job_id=job.id,
             card_id=card.id,
             card_print_id=None,
             ocr_name_raw="X",
@@ -184,6 +237,7 @@ class TestPendingQueue:
 
         result = repo.create_result(
             image.id,
+            job_id=job.id,
             card_id=card.id,
             card_print_id=None,
             ocr_name_raw="X",

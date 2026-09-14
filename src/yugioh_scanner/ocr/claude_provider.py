@@ -24,6 +24,7 @@ from .base import (
     REGION_CODE,
     REGION_FULL,
     REGION_NAME,
+    REGION_PASSCODE,
     BaseOCRProvider,
     OCRRequest,
     OCRResult,
@@ -39,12 +40,14 @@ if TYPE_CHECKING:  # pragma: no cover
 #: porque é o caso normal da cascata; as ROIs entram quando alguém usa
 #: `YGS_OCR_PROVIDER=claude` diretamente (fora da cascata) e o pipeline manda
 #: as regiões de nome/código em vez da carta inteira.
-_REGION_ORDER = (REGION_FULL, REGION_NAME, REGION_CODE)
+_REGION_ORDER = (REGION_FULL, REGION_NAME, REGION_CODE, REGION_PASSCODE)
 
 _PROMPT = (
     "You are reading a photo of a physical Yu-Gi-Oh! trading card. Extract these "
     "fields and answer ONLY with the JSON object the schema requires:\n"
     "- name: the card's printed name, exactly as shown (any language).\n"
+    "- passcode: the 8-digit (sometimes fewer, on very old cards) numeric card ID "
+    "printed in the bottom-left corner — digits only, otherwise an empty string.\n"
     "- set_code: the collector number printed in the bottom-right corner, in the "
     "form PREFIX-REGIONNNN (e.g. 'LOB-EN001', 'SDK-001').\n"
     "- rarity: the rarity mark if visible (e.g. 'Common', 'Ultra Rare', 'Secret "
@@ -63,13 +66,14 @@ _RESPONSE_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
         "name": {"type": "string"},
+        "passcode": {"type": "string"},
         "set_code": {"type": "string"},
         "rarity": {"type": "string"},
         "edition": {"type": "string"},
         "language": {"type": "string"},
         "legible": {"type": "boolean"},
     },
-    "required": ["name", "set_code", "rarity", "edition", "language", "legible"],
+    "required": ["name", "passcode", "set_code", "rarity", "edition", "language", "legible"],
     "additionalProperties": False,
 }
 
@@ -188,10 +192,13 @@ class ClaudeVisionOCRProvider(BaseOCRProvider):
         texts: dict[str, tuple[TextLine, ...]] = {}
         name = str(data.get("name") or "").strip()
         code = str(data.get("set_code") or "").strip()
+        passcode = str(data.get("passcode") or "").strip()
         if name:
             texts[REGION_NAME] = (TextLine(text=name, confidence=confidence),)
         if code:
             texts[REGION_CODE] = (TextLine(text=code, confidence=confidence),)
+        if passcode:
+            texts[REGION_PASSCODE] = (TextLine(text=passcode, confidence=confidence),)
         return texts
 
 

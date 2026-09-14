@@ -6,6 +6,8 @@
   <td>
     {% if item.card_print %}
       {{ item.card_print.set_code_full }}
+    {% elif item.set_code_full %}
+      {{ item.set_code_full }}
     {% else %}
       <span id="set-cell-{{ item.id }}"
             hx-get="/collection/{{ item.id }}/print-options"
@@ -17,7 +19,20 @@
       </span>
     {% endif %}
   </td>
-  <td>{{ item.card_print.rarity if item.card_print else "" }}</td>
+  <td>
+    {% if item.card_print %}
+      {{ item.card_print.rarity or "" }}
+    {% elif item.set_code_full %}
+      <span id="rarity-cell-{{ item.id }}"
+            hx-get="/collection/{{ item.id }}/rarity-options"
+            hx-trigger="click once"
+            hx-target="this"
+            hx-swap="innerHTML"
+            style="cursor:pointer; text-decoration: underline;">
+        (definir raridade)
+      </span>
+    {% endif %}
+  </td>
   <td>
     <button class="outline"
             hx-post="/collection/{{ item.id }}/quantity?delta=-1&lang={{ lang }}"

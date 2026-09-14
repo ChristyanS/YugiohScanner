@@ -34,11 +34,11 @@ def _row_from_item(item: CollectionItem) -> CollectionRow:
         source=item.source,
         added_at=item.added_at.isoformat(),
         card_print_id=item.card_print_id,
-        set_code_full=card_print.set_code_full if card_print else None,
+        set_code_full=item.set_code_full_display,
         set_prefix=card_print.set_prefix if card_print else None,
         region=card_print.region if card_print else None,
         set_name=card_print.set_name if card_print else None,
-        rarity=card_print.rarity if card_print else None,
+        rarity=item.rarity_display,
     )
 
 

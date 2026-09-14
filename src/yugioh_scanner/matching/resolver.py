@@ -208,6 +208,20 @@ class PrintResolver:
             for row in rows
         ]
 
+    def rarities_for_set(self, card_id: int, set_code_full: str) -> list[str]:
+        """Raridades catalogadas para essa carta nesse set — a picklist que a
+        revisão/coleção mostra em vez de deixar o usuário digitar às cegas
+        (ex.: Dark Magician Girl em RA05 → ["Ultra Rare", "Starlight Rare"]).
+        """
+        prints = self.prints_for_card(card_id, set_code_full)
+        seen: set[str] = set()
+        rarities: list[str] = []
+        for print_match in prints:
+            if print_match.rarity and print_match.rarity not in seen:
+                seen.add(print_match.rarity)
+                rarities.append(print_match.rarity)
+        return rarities
+
     def prints_for_card(self, card_id: int, code: str) -> list[PrintMatch]:
         """Prints daquela carta cujo código bate — usado para desempatar.
 

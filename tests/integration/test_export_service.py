@@ -16,6 +16,7 @@ from sqlalchemy import text as sql_text
 
 from yugioh_scanner.db.session import Database
 from yugioh_scanner.exporters import import_full_csv
+from yugioh_scanner.repositories.collection import CollectionKey, CollectionRepository
 from yugioh_scanner.services.collection_service import CollectionService
 from yugioh_scanner.services.export_service import ExportService
 
@@ -47,6 +48,23 @@ class TestBuildRows:
         assert dark_magician.card_print_id is None
         assert dark_magician.set_code_full is None
         assert dark_magician.has_print is False
+
+    def test_pending_set_and_rarity_export_instead_of_blank(self, service: ExportService) -> None:
+        """Set conhecido mas raridade não catalogada/ainda pendente
+        (`CollectionItem.set_code_full`/`.rarity`, card_print_id NULL) não
+        pode virar coluna em branco só porque o print não está totalmente
+        resolvido — a informação existe, só não é a chave de um `CardPrint`."""
+        CollectionRepository(service.session).add_copies(
+            CollectionKey(
+                card_id=DARK_MAGICIAN, set_code_full="RA05-EN032", rarity="Collector's Rare"
+            ),
+            1,
+        )
+        rows = service.build_rows()
+        pending = next(r for r in rows if r.set_code_full == "RA05-EN032")
+        assert pending.card_id == DARK_MAGICIAN
+        assert pending.rarity == "Collector's Rare"
+        assert pending.has_print is False
 
 
 class TestExportToString:

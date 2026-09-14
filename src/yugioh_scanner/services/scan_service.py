@@ -22,6 +22,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..config import Settings
@@ -30,6 +31,7 @@ from ..db.tables import (
     DEFAULT_CONDITION,
     DEFAULT_EDITION,
     DEFAULT_LANGUAGE,
+    Card,
     CardPrint,
     CollectionItem,
     ScanImage,
@@ -56,7 +58,14 @@ from ..matching.print_language import (
     SiblingPrintLanguageResolver,
 )
 from ..matching.resolver import PrintResolver
-from ..ocr.base import REGION_CODE, REGION_FULL, REGION_NAME, OCRProvider, OCRRequest
+from ..ocr.base import (
+    REGION_CODE,
+    REGION_FULL,
+    REGION_NAME,
+    REGION_PASSCODE,
+    OCRProvider,
+    OCRRequest,
+)
 from ..ocr.registry import create_provider
 from ..repositories.collection import CollectionKey, CollectionRepository
 from ..repositories.print_override import PrintOverrideRepository
@@ -96,11 +105,15 @@ class ImageEvent:
     #: diagnosticar por que uma leitura ficou `manual` sem reabrir a foto.
     ocr_name: str | None = None
     ocr_code: str | None = None
+    ocr_passcode: str | None = None
     #: A carta/print **resolvidos** no catálogo — pode divergir bastante do
     #: texto bruto (ou ficar `None` quando nada casou).
     card_name: str | None = None
     set_code: str | None = None
     confidence: float | None = None
+    #: A identidade veio do passcode validado — a fonte mais forte que existe
+    #: (`matching/engine.py::_from_passcode`). Transparência para CLI/--json.
+    passcode_verified: bool = False
     applied: bool = False
     error: str | None = None
     #: `None` em dry-run e para imagens puladas/falhas — nada foi persistido.
@@ -121,9 +134,11 @@ class ImageEvent:
             "result_id": self.result_id,
             "ocr_name": self.ocr_name,
             "ocr_code": self.ocr_code,
+            "ocr_passcode": self.ocr_passcode,
             "name": self.card_name,
             "set_code": self.set_code,
             "confidence": None if self.confidence is None else round(self.confidence, 4),
+            "passcode_verified": self.passcode_verified,
             "applied": self.applied,
             "error": self.error,
             "crop_index": self.crop_index,
@@ -145,6 +160,7 @@ class FallbackReading:
     match: MatchResult
     name_raw: str
     code_raw: str
+    passcode_raw: str = ""
 
 
 @dataclass
@@ -160,8 +176,18 @@ class ScanRunReport:
     skipped: int = 0
     processed: int = 0
     auto_added: int = 0
+    #: Dos `auto_added` acima, quantos eram `--reprocess` de um recorte que
+    #: já tinha sido aplicado num scan anterior (`has_applied_result`) — não
+    #: escreveram nada novo na coleção. Informativo só; não é subtraído de
+    #: `auto_added` (a decisão do motor foi `auto` de verdade, é isso que
+    #: `auto_added` reporta) nem somado a `pending` (não precisa de revisão
+    #: nenhuma — plano §13.2).
+    already_applied: int = 0
     pending: int = 0
     failed: int = 0
+    #: Células de uma grade `--grid-size` descartadas por estarem vazias —
+    #: nunca viraram `ScanResult`, então não entram em `pending`/`failed`.
+    skipped_empty: int = 0
     elapsed_s: float = 0.0
     events: list[ImageEvent] = field(default_factory=list)
 
@@ -175,8 +201,10 @@ class ScanRunReport:
             "skipped": self.skipped,
             "processed": self.processed,
             "auto_added": self.auto_added,
+            "already_applied": self.already_applied,
             "pending": self.pending,
             "failed": self.failed,
+            "skipped_empty": self.skipped_empty,
             "elapsed_s": round(self.elapsed_s, 2),
             "results": [event.as_dict() for event in self.events],
         }
@@ -231,6 +259,8 @@ class ScanService:
         reprocess: bool = False,
         grid: bool = False,
         grid_size: tuple[int, int] | None = None,
+        require_set: bool | None = None,
+        require_rarity: bool | None = None,
         progress: ProgressCallback | None = None,
     ) -> ScanRunReport:
         started = time.perf_counter()
@@ -273,6 +303,8 @@ class ScanService:
                 progress=progress,
                 grid=effective_grid,
                 grid_size=grid_size,
+                require_set=require_set,
+                require_rarity=require_rarity,
             )
             if apply:
                 session.commit()
@@ -298,6 +330,7 @@ class ScanService:
             auto_added=report.auto_added,
             pending=report.pending,
             failed=report.failed,
+            skipped_empty=report.skipped_empty,
         )
         return report
 
@@ -312,6 +345,7 @@ class ScanService:
             for result in results:
                 _ = result.scan_image.file_path
             self._attach_code_prints(session, results)
+            self._attach_card_names(session, results)
             return results
 
     def _attach_code_prints(self, session: Session, results: list[ScanResult]) -> None:
@@ -333,6 +367,26 @@ class ScanService:
             prints = resolver.resolve(result.ocr_code_raw).prints if result.ocr_code_raw else []
             result.code_prints = [p.as_dict() for p in prints]
 
+    def _attach_card_names(self, session: Session, results: list[ScanResult]) -> None:
+        """Anexa o nome da carta já identificada por `card_id`, quando houver.
+
+        Achado real do usuário: quando o nome lido pelo OCR não rendeu
+        candidato nenhum (comum em cartas JP/CJK — o motor de nome nem
+        tenta, `matching/candidates.py::MIN_MATCHABLE_LENGTH`) mas o
+        passcode ou o código sozinhos já identificaram a carta
+        (`_from_passcode`/`_from_code_only`), `ScanResult.candidates` fica
+        vazio e a revisão não tinha como sugerir nada — obrigando busca
+        manual do zero para uma carta que o sistema já sabia qual era. Uma
+        query só para o lote inteiro, mesmo espírito de `_attach_code_prints`.
+        """
+        card_ids = {result.card_id for result in results if result.card_id is not None}
+        names: dict[int, str] = {}
+        if card_ids:
+            rows = session.execute(select(Card.id, Card.name).where(Card.id.in_(card_ids)))
+            names = {row.id: row.name for row in rows}
+        for result in results:
+            result.card_name = names.get(result.card_id) if result.card_id is not None else None
+
     def get_image_path(self, scan_image_id: int) -> Path:
         """Caminho no disco da foto original (Fase 8: `/review` mostra a
         foto ao lado da leitura — nunca aceita caminho vindo do cliente, só
@@ -351,6 +405,7 @@ class ScanService:
                 raise ScanResultNotFoundError(result_id)
             _ = result.scan_image.file_path
             self._attach_code_prints(session, [result])
+            self._attach_card_names(session, [result])
             session.expunge(result)
             return result
 
@@ -360,6 +415,8 @@ class ScanService:
         *,
         card_id: int,
         card_print_id: int | None = None,
+        set_code_full: str | None = None,
+        rarity_override: str | None = None,
         quantity: int = 1,
         language: str | None = None,
     ) -> CollectionItem:
@@ -374,6 +431,11 @@ class ScanService:
         no momento da confirmação) tem prioridade; omitido, cai para o
         idioma que o matching já havia detectado (`ScanResult.detected_language`)
         e só então para `DEFAULT_LANGUAGE` — nunca fica sem valor.
+
+        `set_code_full`/`rarity_override` só se aplicam quando `card_print_id`
+        é `None`: é o caso "sei o set, a raridade real não está catalogada" —
+        a revisão manda o set escolhido no seletor em cascata e o texto livre
+        digitado, em vez de forçar um print inventado.
         """
         with self.database.session() as session:
             scan_repo = ScanRepository(session)
@@ -385,10 +447,26 @@ class ScanService:
             if result.applied:
                 raise ScanResultAlreadyAppliedError(result_id)
 
+            # Se a raridade escolhida/digitada bater com uma catalogada para
+            # este set, resolve o print de verdade em vez de gravar como
+            # pendente — "raridade não catalogada" só quando nenhuma bate.
+            if card_print_id is None and set_code_full and rarity_override:
+                matches = [
+                    p
+                    for p in PrintResolver(session).prints_for_card(card_id, set_code_full)
+                    if (p.rarity or "").casefold() == rarity_override.casefold()
+                ]
+                if len(matches) == 1:
+                    card_print_id = matches[0].print_id
+                    set_code_full = None
+                    rarity_override = None
+
             resolved_language = language or result.detected_language or DEFAULT_LANGUAGE
             key = CollectionKey(
                 card_id=card_id,
                 card_print_id=card_print_id,
+                set_code_full=set_code_full if card_print_id is None else None,
+                rarity=rarity_override if card_print_id is None else None,
                 condition=DEFAULT_CONDITION,
                 edition=DEFAULT_EDITION,
                 language=resolved_language,
@@ -418,6 +496,13 @@ class ScanService:
             _ = item.card_print
             session.expunge(item)
             return item
+
+    def rarities_for_set(self, card_id: int, set_code_full: str) -> list[str]:
+        """Raridades catalogadas para essa carta nesse set — usado pela
+        revisão (CLI/Web) para oferecer uma picklist em vez de texto livre
+        às cegas quando `card_print_id` ficou `None` por ambiguidade."""
+        with self.database.session() as session:
+            return PrintResolver(session).rarities_for_set(card_id, set_code_full)
 
     def reject_result(self, result_id: int) -> None:
         """Descarta uma leitura pendente sem tocar na coleção.
@@ -475,6 +560,8 @@ class ScanService:
         progress: ProgressCallback | None,
         grid: bool = False,
         grid_size: tuple[int, int] | None = None,
+        require_set: bool | None = None,
+        require_rarity: bool | None = None,
     ) -> None:
         scan_repo = ScanRepository(session)
         collection_repo = CollectionRepository(session)
@@ -530,6 +617,8 @@ class ScanService:
                     report=report,
                     apply=apply,
                     no_auto=no_auto,
+                    require_set=require_set,
+                    require_rarity=require_rarity,
                 )
             report.events.extend(crop_events)
             for event in crop_events:
@@ -594,6 +683,8 @@ class ScanService:
         report: ScanRunReport,
         apply: bool,
         no_auto: bool,
+        require_set: bool | None = None,
+        require_rarity: bool | None = None,
     ) -> list[ImageEvent]:
         """Bookkeeping por foto; o matching/decisão de cada recorte é
         delegado a `_handle_crop` — uma foto sem grade rende exatamente um
@@ -601,6 +692,7 @@ class ScanService:
         foto = uma carta) produz exatamente um `ImageEvent`, como sempre.
         """
         report.processed += 1
+        report.skipped_empty += outcome.skipped_empty
 
         if outcome.preprocess_status is not None:
             # A foto inteira falhou antes de qualquer recorte (arquivo
@@ -637,10 +729,13 @@ class ScanService:
                 crop,
                 outcome,
                 image,
+                job_id=job_id,
                 engine=engine,
                 report=report,
                 apply=apply,
                 no_auto=no_auto,
+                require_set=require_set,
+                require_rarity=require_rarity,
                 scan_repo=scan_repo,
                 collection_repo=collection_repo,
             )
@@ -653,12 +748,15 @@ class ScanService:
         outcome: ScanOutcome,
         image: ScanImage | None,
         *,
+        job_id: int | None,
         engine: MatchingEngine,
         report: ScanRunReport,
         apply: bool,
         no_auto: bool,
         scan_repo: ScanRepository,
         collection_repo: CollectionRepository,
+        require_set: bool | None = None,
+        require_rarity: bool | None = None,
     ) -> ImageEvent:
         if crop.failed or crop.status == "ocr_empty":
             report.failed += 1
@@ -670,10 +768,13 @@ class ScanService:
                 crop_count=crop.region.count,
             )
 
-        match_result = engine.match(crop.read_name, crop.read_code or None)
+        match_result = engine.match(
+            crop.read_name, crop.read_code or None, crop.read_passcode or None
+        )
         decision = match_result.decision
         ocr_name_raw = crop.read_name
         ocr_code_raw = crop.read_code
+        ocr_passcode_raw = crop.read_passcode
 
         # Cascata (plano §6.3): só a fração duvidosa reprocessa por LLM —
         # decisão `auto` já está resolvida e não vale o custo/latência extra.
@@ -689,9 +790,41 @@ class ScanService:
                 # continuava com o texto do worker).
                 ocr_name_raw = fallback.name_raw or ocr_name_raw
                 ocr_code_raw = fallback.code_raw or ocr_code_raw
+                ocr_passcode_raw = fallback.passcode_raw or ocr_passcode_raw
 
         if no_auto and decision == Decision.AUTO:
             decision = Decision.PENDING
+
+        # Política "AUTO exige SET"/"AUTO exige RARIDADE" — duas exigências
+        # independentes, nunca a mesma coisa (pedido do usuário): `set_code`
+        # sozinho já significa "identifiquei o set/print corretamente", ainda
+        # que 2+ raridades catalogadas para ele deixem `card_print_id` em
+        # `None` até alguém escolher qual. Sem separar as duas, uma leitura
+        # com set 100% certo e só a raridade pendente caía em revisão do
+        # mesmo jeito que uma leitura sem set nenhum — a diferença importa
+        # porque o set já é o suficiente para "a carta foi analisada com
+        # sucesso" (o item entra com `CollectionItem.set_code_full`
+        # preenchido e raridade pendente, resolvível depois em `/collection`).
+        if decision == Decision.AUTO and match_result.card_print_id is None:
+            requires_set = (
+                self.settings.auto_requires_print if require_set is None else require_set
+            )
+            requires_rarity = (
+                self.settings.auto_requires_rarity
+                if require_rarity is None
+                else require_rarity
+            )
+            set_known = match_result.set_code is not None
+            if not set_known and requires_set:
+                decision = Decision.PENDING
+                match_result.reason = (
+                    "carta identificada, mas sem set/print resolvido — confirme manualmente"
+                )
+            elif set_known and requires_rarity:
+                decision = Decision.PENDING
+                match_result.reason = (
+                    "set identificado, mas raridade ambígua — confirme manualmente"
+                )
 
         applied = False
         result_id: int | None = None
@@ -700,8 +833,10 @@ class ScanService:
                 image.id,
                 decision,
                 match_result,
+                job_id=job_id,
                 ocr_name_raw=ocr_name_raw or None,
                 ocr_code_raw=ocr_code_raw or None,
+                ocr_passcode_raw=ocr_passcode_raw or None,
                 scan_repo=scan_repo,
                 collection_repo=collection_repo,
                 crop_index=crop.region.index,
@@ -709,16 +844,18 @@ class ScanService:
                 source_bbox=crop.region.bbox,
             )
 
-        # `applied` só significa algo em `apply=True` (é a gravação de verdade
-        # na coleção). Em dry-run ele é sempre False — nada é jamais aplicado
-        # — então contar por `applied` faria o preview mentir, mostrando 0
-        # adições automáticas mesmo quando a decisão é `auto`. Em dry-run,
-        # "seria adicionada" é só a decisão; em modo real, só conta o que de
-        # fato foi gravado (por isso a guarda de `--reprocess` continua
-        # funcionando: decisão auto + não reaplicada cai em pending).
-        counts_as_auto_added = decision == Decision.AUTO and (applied or not apply)
-        if counts_as_auto_added:
+        # `auto_added`/`pending` espelham a decisão do motor (`decision`),
+        # igual ao que cada `ImageEvent` individual mostra — achado real do
+        # usuário (Scan #70): contar por `applied` fazia o resumo do job
+        # mentir feio num `--reprocess`, jogando recortes já resolvidos
+        # (`has_applied_result`) para dentro de `pending` mesmo quando o
+        # motor decidiu `auto` e o log por imagem dizia `[auto]`. `pending`
+        # tem que significar "precisa de revisão" — um recorte já aplicado
+        # antes não precisa, `already_applied` é onde essa informação mora.
+        if decision == Decision.AUTO:
             report.auto_added += 1
+            if apply and not applied:
+                report.already_applied += 1
         else:
             report.pending += 1
 
@@ -729,9 +866,11 @@ class ScanService:
             result_id=result_id,
             ocr_name=ocr_name_raw or None,
             ocr_code=ocr_code_raw or None,
+            ocr_passcode=ocr_passcode_raw or None,
             card_name=match_result.card_name,
             set_code=match_result.set_code,
             confidence=match_result.confidence,
+            passcode_verified=match_result.passcode_verified,
             applied=applied,
             crop_index=crop.region.index,
             crop_count=crop.region.count,
@@ -743,8 +882,10 @@ class ScanService:
         decision: Decision,
         match_result: MatchResult,
         *,
+        job_id: int | None,
         ocr_name_raw: str | None,
         ocr_code_raw: str | None,
+        ocr_passcode_raw: str | None = None,
         scan_repo: ScanRepository,
         collection_repo: CollectionRepository,
         crop_index: int = 0,
@@ -760,6 +901,7 @@ class ScanService:
         """
         result = scan_repo.create_result(
             scan_image_id,
+            job_id=job_id,
             card_id=match_result.card_id,
             card_print_id=match_result.card_print_id,
             # O texto **bruto** do OCR — não o nome/código já resolvidos no
@@ -767,6 +909,7 @@ class ScanService:
             # ao lado da carta identificada para o usuário julgar a leitura.
             ocr_name_raw=ocr_name_raw,
             ocr_code_raw=ocr_code_raw,
+            ocr_passcode_raw=ocr_passcode_raw,
             name_score=match_result.name_score,
             code_score=match_result.code_score,
             confidence=match_result.confidence,
@@ -774,6 +917,8 @@ class ScanService:
             candidates=match_result.candidates or None,
             decision=decision.value,
             detected_language=match_result.matched_language,
+            matched_set_code=match_result.set_code,
+            passcode_verified=match_result.passcode_verified,
             crop_index=crop_index,
             crop_count=crop_count,
             source_bbox=source_bbox,
@@ -816,6 +961,11 @@ class ScanService:
         key = CollectionKey(
             card_id=match_result.card_id,
             card_print_id=print_id,
+            # Só relevante com `--allow-no-set-auto`: a política padrão
+            # (`auto_requires_print`) já rebaixa para PENDING antes daqui
+            # quando `print_id is None`, mas se o usuário optou por permitir
+            # mesmo assim, o set identificado não pode se perder.
+            set_code_full=match_result.set_code if print_id is None else None,
             condition=DEFAULT_CONDITION,
             edition=DEFAULT_EDITION,
             language=language,
@@ -901,11 +1051,14 @@ class ScanService:
 
         name = result.joined(REGION_NAME) or result.joined(REGION_FULL)
         code = result.best(REGION_CODE)
-        fallback_match = engine.match(name, code or None)
+        passcode = result.best(REGION_PASSCODE)
+        fallback_match = engine.match(name, code or None, passcode or None)
         log.info(
             "scan.fallback_used",
             file=path.name,
             crop_index=region.index,
             confidence=round(fallback_match.confidence, 3),
         )
-        return FallbackReading(match=fallback_match, name_raw=name, code_raw=code)
+        return FallbackReading(
+            match=fallback_match, name_raw=name, code_raw=code, passcode_raw=passcode
+        )

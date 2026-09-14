@@ -14,8 +14,8 @@ app = typer.Typer(help="Gerenciar a coleção manualmente.", no_args_is_help=Tru
 
 
 def _row(item: CollectionItem) -> list[object]:
-    set_label = item.card_print.set_code_full if item.card_print else "(indefinido)"
-    rarity = item.card_print.rarity if item.card_print and item.card_print.rarity else ""
+    set_label = item.set_code_full_display or "(indefinido)"
+    rarity = item.rarity_display or ""
     return [item.id, item.card.name, set_label, rarity, item.quantity, item.condition]
 
 
@@ -25,8 +25,8 @@ def _item_dict(item: CollectionItem) -> dict[str, object]:
         "card_id": item.card_id,
         "card_name": item.card.name,
         "card_print_id": item.card_print_id,
-        "set_code": item.card_print.set_code_full if item.card_print else None,
-        "rarity": item.card_print.rarity if item.card_print else None,
+        "set_code": item.set_code_full_display,
+        "rarity": item.rarity_display,
         "quantity": item.quantity,
         "condition": item.condition,
         "edition": item.edition,
@@ -44,6 +44,9 @@ def list_cmd(
         None, "--set", help="Filtra pelo prefixo do set (ex.: LOB, MP24)."
     ),
     no_set: bool = typer.Option(False, "--no-set", help="Só itens sem set identificado."),
+    no_rarity: bool = typer.Option(
+        False, "--no-rarity", help="Só itens com set conhecido mas raridade pendente."
+    ),
     sort: str = typer.Option("name", "--sort", help="Coluna: name, quantity, added ou set."),
     descending: bool = typer.Option(False, "--desc", help="Ordem decrescente."),
     limit: int = typer.Option(None, "--limit", "-n", help="Limita o número de linhas."),
@@ -55,6 +58,7 @@ def list_cmd(
             search=search,
             set_prefix=set_code,
             no_set=no_set,
+            no_rarity=no_rarity,
             sort=sort,
             descending=descending,
             limit=limit,
@@ -75,6 +79,14 @@ def list_cmd(
 def add_cmd(
     name: str = typer.Argument(..., help="Nome da carta (aceita parcial)."),
     set_code: str = typer.Option(None, "--set-code", help="Código do print, se souber."),
+    rarity: str = typer.Option(
+        None,
+        "--rarity",
+        help=(
+            "Desempata --set-code com 2+ raridades catalogadas. Se não bater com "
+            "nenhuma catalogada, entra com set conhecido e raridade pendente."
+        ),
+    ),
     quantity: int = typer.Option(1, "--qty", "-q", min=1, help="Quantas cópias."),
     condition: str = typer.Option("Near Mint", "--condition", help="Estado de conservação."),
     edition: str = typer.Option(
@@ -95,6 +107,7 @@ def add_cmd(
             item = service.add_manual(
                 name,
                 set_code=set_code,
+                rarity=rarity,
                 quantity=quantity,
                 condition=condition,
                 edition=edition,
@@ -205,6 +218,28 @@ def set_print_cmd(
         print_json(result)
     else:
         success(f"{item.card.name}: set definido como {result['set_code']}")
+
+
+@app.command("set-rarity")
+@handle_errors
+def set_rarity_cmd(
+    item_id: int = typer.Argument(..., help="ID do item."),
+    rarity: str = typer.Argument(..., help="Raridade impressa na carta."),
+    as_json: bool = typer.Option(False, "--json", help="Saída em JSON."),
+) -> None:
+    """Resolve a raridade de um item com set conhecido mas print pendente.
+
+    Se `rarity` bater com uma catalogada para o set, resolve o print de
+    verdade; senão, grava como texto pendente (raridade real não catalogada).
+    """
+    with collection_service() as service:
+        item = service.resolve_rarity(item_id, rarity)
+        result = _item_dict(item)
+
+    if as_json:
+        print_json(result)
+    else:
+        success(f"{item.card.name}: raridade definida como {result['rarity']}")
 
 
 @app.command("show")

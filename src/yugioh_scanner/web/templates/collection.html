@@ -8,6 +8,7 @@
     <input type="search" id="search" name="search" placeholder="Buscar por nome..." value="{{ filters.search or '' }}">
     <input type="text" name="set" class="filter" placeholder="Set (ex.: LOB)" value="{{ filters.set_prefix or '' }}">
     <label><input type="checkbox" name="no_set" class="filter" value="1" {% if filters.no_set %}checked{% endif %}> Só sem set</label>
+    <label><input type="checkbox" name="no_rarity" class="filter" value="1" {% if filters.no_rarity %}checked{% endif %}> Só sem raridade</label>
   </div>
   <div class="grid">
     <select name="sort" class="filter">

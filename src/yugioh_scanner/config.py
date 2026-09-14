@@ -25,7 +25,7 @@ LogFormat = Literal["console", "json"]
 #: manter em sincronia — e adicionar um provider passaria a exigir editar a
 #: configuração, exatamente o acoplamento que o Protocol existe para evitar.
 #: A validação acontece onde o nome é usado, com erro que lista os disponíveis.
-BUILTIN_OCR_PROVIDERS = ("rapidocr", "tesseract", "paddle", "easyocr", "claude")
+BUILTIN_OCR_PROVIDERS = ("rapidocr", "tesseract", "claude")
 
 def _detect_roots() -> tuple[Path, Path]:
     """(âncora para paths relativos do usuário, raiz dos recursos empacotados).
@@ -134,6 +134,31 @@ class Settings(BaseSettings):
     confidence_auto: float = Field(default=0.93, ge=0.0, le=1.0)
     confidence_review: float = Field(default=0.70, ge=0.0, le=1.0)
     fuzzy_cutoff: int = Field(default=70, ge=0, le=100)
+    auto_requires_print: bool = Field(
+        default=True,
+        description=(
+            "Se True, uma leitura só vira AUTO quando o SET também foi "
+            "identificado (`MatchResult.set_code` validado) — sem isso, cai para "
+            "PENDING mesmo com nome de alta confiança, para nunca perder o "
+            "vínculo com a foto de origem. Não exige a raridade exata — ver "
+            "`auto_requires_rarity` para isso. Override por scan via "
+            "--require-set/--allow-no-set-auto."
+        ),
+    )
+    auto_requires_rarity: bool = Field(
+        default=False,
+        description=(
+            "Se True, uma leitura só vira AUTO quando a raridade também foi "
+            "resolvida (card_print_id exato, não só o set) — sem isso, cai para "
+            "PENDING mesmo com o set 100% identificado. Default False: set "
+            "sozinho já conta como 'carta analisada com sucesso' — o item entra "
+            "na coleção com `CollectionItem.set_code_full` preenchido e raridade "
+            "pendente (resolvível depois em `/collection`), exatamente quando 2+ "
+            "raridades estão catalogadas para o mesmo set (sets com uma raridade "
+            "só já resolvem `card_print_id` sozinhos, sem passar por aqui). "
+            "Override por scan via --require-rarity/--allow-no-rarity-auto."
+        ),
+    )
 
     # -------------------------------------------------------------------- sync
     sync_alt_languages: list[str] = Field(

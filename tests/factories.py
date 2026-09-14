@@ -1,10 +1,10 @@
 """Geradores de dados para testes.
 
 As "cartas" sintéticas imitam o **layout** de uma carta de Yu-Gi-Oh! (nome na
-faixa superior, set code logo abaixo da arte, acima da caixa de texto/efeito)
-na proporção real 59×86 mm. Isso permite exercitar ROI, pré-processamento e
-até o OCR de verdade sem depender de um corpus de fotos — que, conforme o
-plano §19.4, entra na Fase 9.
+faixa superior, set code rente à borda da caixa de texto/efeito, passcode no
+canto inferior-esquerdo) na proporção real 59×86 mm. Isso permite exercitar
+ROI, pré-processamento e até o OCR de verdade sem depender de um corpus de
+fotos — que, conforme o plano §19.4, entra na Fase 9.
 """
 
 from __future__ import annotations
@@ -34,6 +34,7 @@ def make_card_image(
     *,
     name: str = "BLUE-EYES WHITE DRAGON",
     set_code: str = "LOB-001",
+    passcode: str = "12345678",
     height: int = 860,
     background: tuple[int, int, int] = (196, 168, 96),
     margin: int = 0,
@@ -73,13 +74,14 @@ def make_card_image(
         outline=(40, 40, 40),
     )
 
-    # Set code: logo abaixo da arte, acima da caixa de texto (mesma ROI do
-    # preprocess — plano de idiomas, continuação: a posição antiga aqui
-    # coincidia com o bug real da ROI, então corrigir só o `preprocess.py`
-    # sem mexer aqui teria deixado os testes "passando" contra um layout que
-    # nenhuma carta de verdade tem).
+    # Set code: rente à borda superior da caixa de texto (mesma ROI real do
+    # preprocess — corrigida contra fotos reais, ver `CODE_ROI`). A posição
+    # antiga aqui (0.705) coincidia com o bug real da ROI (0.69-0.775, alta
+    # demais); mantê-la desatualizada depois de corrigir só o `preprocess.py`
+    # teria deixado os testes "passando" contra um layout que nenhuma carta
+    # de verdade tem.
     draw.text(
-        (int(width * 0.50), int(height * 0.705)),
+        (int(width * 0.50), int(height * 0.71)),
         set_code,
         fill=(15, 15, 15),
         font=_font(max(11, int(height * 0.032))),
@@ -89,6 +91,17 @@ def make_card_image(
     draw.rectangle(
         [(int(width * 0.07), int(height * 0.80)), (int(width * 0.93), int(height * 0.93))],
         fill=(226, 214, 186),
+    )
+
+    # Passcode ("Card ID"): canto inferior-esquerdo, rente à borda física da
+    # carta — mesma ROI real do preprocess (`PASSCODE_ROI`, corrigida contra
+    # fotos reais; a estimativa inicial por mirror do `CODE_ROI` media a
+    # mesma altura errada dele).
+    draw.text(
+        (int(width * 0.02), int(height * 0.955)),
+        passcode,
+        fill=(15, 15, 15),
+        font=_font(max(10, int(height * 0.025))),
     )
 
     if margin:

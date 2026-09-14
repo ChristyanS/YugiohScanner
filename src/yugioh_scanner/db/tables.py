@@ -395,6 +395,15 @@ class CollectionItem(Base):
     card_print_id: Mapped[int | None] = mapped_column(
         ForeignKey("card_print.id", ondelete="SET NULL")
     )
+    #: Set já identificado mesmo sem `card_print_id` resolvido (ADR: set e
+    #: raridade desacoplados) — ex.: código validado, mas 2+ raridades
+    #: catalogadas para ele. Só tem sentido quando `card_print_id IS NULL`;
+    #: leia via `set_code_full_display`.
+    set_code_full: Mapped[str | None] = mapped_column(String(64))
+    #: Raridade "pendente": digitada manualmente ou ainda não escolhida entre
+    #: as catalogadas para `set_code_full`. Só tem sentido quando
+    #: `card_print_id IS NULL`; leia via `rarity_display`.
+    rarity: Mapped[str | None] = mapped_column(String(64))
 
     quantity: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     condition: Mapped[str] = mapped_column(String(32), nullable=False, default=DEFAULT_CONDITION)
@@ -411,13 +420,26 @@ class CollectionItem(Base):
     card: Mapped[Card] = relationship(lazy="joined")
     card_print: Mapped[CardPrint | None] = relationship(lazy="joined")
 
+    @property
+    def set_code_full_display(self) -> str | None:
+        return self.card_print.set_code_full if self.card_print else self.set_code_full
+
+    @property
+    def rarity_display(self) -> str | None:
+        return self.card_print.rarity if self.card_print else self.rarity
+
     __table_args__ = (
         # SQLite trata NULLs como distintos em UNIQUE, então um print NULL
-        # furaria a unicidade. O COALESCE resolve (plano §4.3).
+        # furaria a unicidade. O COALESCE resolve (plano §4.3). `set_code_full`/
+        # `rarity` entram na mesma lógica: dois itens do mesmo card com
+        # `card_print_id` ainda indefinido não podem colidir só porque os
+        # dois são NULL — o set (e a raridade) pendentes também distinguem.
         Index(
             "ux_collection",
             "card_id",
             text("COALESCE(card_print_id, -1)"),
+            text("COALESCE(set_code_full, '')"),
+            text("COALESCE(rarity, '')"),
             "condition",
             "edition",
             "language",
@@ -531,6 +553,15 @@ class ScanResult(Base):
     scan_image_id: Mapped[int] = mapped_column(
         ForeignKey("scan_image.id", ondelete="CASCADE"), nullable=False
     )
+    #: O job que **produziu** esta leitura — não confundir com
+    #: `scan_image.job_id` (o job que descobriu o arquivo pela primeira vez,
+    #: que não muda em reprocessamentos seguintes). Achado real do usuário:
+    #: `GET /scan/{id}` listava os resultados filtrando por
+    #: `scan_image.job_id`, então um `--reprocess` (ou qualquer novo scan de
+    #: uma pasta já vista) criava `ScanResult` novos que nunca apareciam na
+    #: tela do job que de fato os gerou — ficavam "presos" na tela do job
+    #: original que primeiro viu aquele arquivo.
+    job_id: Mapped[int | None] = mapped_column(ForeignKey("scan_job.id", ondelete="SET NULL"))
 
     card_id: Mapped[int | None] = mapped_column(ForeignKey("card.id", ondelete="SET NULL"))
     card_print_id: Mapped[int | None] = mapped_column(
@@ -539,6 +570,18 @@ class ScanResult(Base):
 
     ocr_name_raw: Mapped[str | None] = mapped_column(String(512))
     ocr_code_raw: Mapped[str | None] = mapped_column(String(64))
+    #: Código já validado contra o catálogo (`MatchResult.set_code`) —
+    #: diferente de `ocr_code_raw` (texto bruto do OCR). Persistido para que
+    #: um `PENDING` sem `card_print_id` (raridade ambígua ou não lida) ainda
+    #: carregue o set identificado até a revisão/coleção resolver a raridade.
+    matched_set_code: Mapped[str | None] = mapped_column(String(64))
+    #: Texto bruto do passcode ("Card ID", canto inferior-esquerdo) — mesmo
+    #: padrão de `ocr_code_raw`, a revisão mostra o que foi lido.
+    ocr_passcode_raw: Mapped[str | None] = mapped_column(String(16))
+    #: A identidade desta leitura veio do passcode validado contra o
+    #: catálogo (`MatchResult.passcode_verified`) — a fonte mais forte que
+    #: existe, mais forte que nome ou set code. Transparência para a revisão.
+    passcode_verified: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
     #: Idioma que o nome casado sugere (o candidato vencedor veio de
     #: `card.name_normalized` -> "EN", ou de `card_alt_name.language`
@@ -588,9 +631,17 @@ class ScanResult(Base):
     #: oferecer o set certo mesmo quando a carta escolhida não é a que o
     #: motor apontou como vencedora do nome (matching/resolver.py).
     code_prints: list[dict[str, object]] | None = None
+    #: Também não é coluna — calculado sob demanda por
+    #: `ScanService._attach_card_names` a partir de `card_id`. Existe para a
+    #: revisão poder sugerir a carta já identificada pelo passcode/código
+    #: (`matching/engine.py::_from_passcode`/`_from_code_only`) mesmo quando
+    #: `candidates` está vazio (nome ilegível — comum em cartas JP/CJK, onde
+    #: o OCR de nome não tem chance nenhuma, mas o passcode sozinho resolve).
+    card_name: str | None = None
 
     __table_args__ = (
         Index("ix_scan_result_image", "scan_image_id"),
+        Index("ix_scan_result_job", "job_id"),
         Index("ix_scan_result_card", "card_id"),
         # Índice parcial: a fila de revisão é a consulta quente desta tabela.
         Index(

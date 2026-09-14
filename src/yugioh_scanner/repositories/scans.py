@@ -17,7 +17,7 @@ from __future__ import annotations
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ..db.tables import ScanImage, ScanJob, ScanResult, utcnow
+from ..db.tables import CollectionItem, ScanImage, ScanJob, ScanResult, utcnow
 from ..images.preprocess import BoundingBox
 
 
@@ -82,14 +82,15 @@ class ScanRepository:
     def results_for_job(self, job_id: int) -> list[ScanResult]:
         """Todos os resultados de um job — a grade de `/scan/{id}` (Fase 8).
 
-        Junta em vez de percorrer `job.images` (que é `lazy="select"`, uma
-        consulta por imagem): uma consulta só, já na forma que a tela usa.
+        Filtra por `ScanResult.job_id` (o job que **produziu** a leitura),
+        não por `scan_image.job_id` (o job que descobriu o arquivo pela
+        primeira vez) — achado real do usuário: um `--reprocess` cria
+        `ScanResult` novos para arquivos já conhecidos de um job anterior;
+        filtrar pelo dono original da `ScanImage` fazia esses resultados
+        nunca aparecerem na tela do job que de fato os gerou.
         """
         stmt = (
-            select(ScanResult)
-            .join(ScanImage, ScanResult.scan_image_id == ScanImage.id)
-            .where(ScanImage.job_id == job_id)
-            .order_by(ScanResult.id)
+            select(ScanResult).where(ScanResult.job_id == job_id).order_by(ScanResult.id)
         )
         return list(self.session.scalars(stmt))
 
@@ -180,10 +181,20 @@ class ScanRepository:
         recorte é uma carta diferente e aplica independentemente — sem o
         filtro, uma foto de 4 cartas com o recorte #0 já aplicado faria os
         recortes #1-#3 serem recusados por engano num `--reprocess`.
+
+        O `JOIN` contra `CollectionItem` (não só `ScanResult.applied`) é
+        deliberado: achado real do usuário — a coleção ficou vazia por fora
+        deste caminho (reset de banco durante um teste), mas os `ScanResult`
+        antigos continuavam com `applied=True`, e a guarda recusava reaplicar
+        para sempre, mesmo a carta não existindo mais na coleção. `applied`
+        sozinho é só "alguém marcou uma vez"; o que importa é se aquele
+        `collection_item` ainda existe de verdade.
         """
         return (
             self.session.scalars(
-                select(ScanResult.id).where(
+                select(ScanResult.id)
+                .join(CollectionItem, CollectionItem.id == ScanResult.collection_item_id)
+                .where(
                     ScanResult.scan_image_id == scan_image_id,
                     ScanResult.crop_index == crop_index,
                     ScanResult.applied.is_(True),
@@ -196,6 +207,7 @@ class ScanRepository:
         self,
         scan_image_id: int,
         *,
+        job_id: int | None,
         card_id: int | None,
         card_print_id: int | None,
         ocr_name_raw: str | None,
@@ -207,16 +219,23 @@ class ScanRepository:
         candidates: list[dict] | None,
         decision: str,
         detected_language: str | None = None,
+        matched_set_code: str | None = None,
+        ocr_passcode_raw: str | None = None,
+        passcode_verified: bool = False,
         crop_index: int = 0,
         crop_count: int = 1,
         source_bbox: BoundingBox | None = None,
     ) -> ScanResult:
         result = ScanResult(
             scan_image_id=scan_image_id,
+            job_id=job_id,
             card_id=card_id,
             card_print_id=card_print_id,
             ocr_name_raw=ocr_name_raw,
             ocr_code_raw=ocr_code_raw,
+            matched_set_code=matched_set_code,
+            ocr_passcode_raw=ocr_passcode_raw,
+            passcode_verified=passcode_verified,
             name_score=name_score,
             code_score=code_score,
             confidence=confidence,

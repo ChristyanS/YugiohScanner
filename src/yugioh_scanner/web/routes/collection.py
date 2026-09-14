@@ -27,6 +27,7 @@ def _filters(request: Request) -> dict[str, Any]:
         "search": q.get("search") or None,
         "set_prefix": q.get("set") or None,
         "no_set": q.get("no_set") in ("1", "true", "on"),
+        "no_rarity": q.get("no_rarity") in ("1", "true", "on"),
         "sort": q.get("sort") or "name",
         "descending": q.get("desc") in ("1", "true", "on"),
         "view": q.get("view") if q.get("view") in ("table", "gallery") else "table",
@@ -115,6 +116,32 @@ def set_print(
     card_print_id: Annotated[int, Form()],
 ) -> HTMLResponse:
     collection.set_print(item_id, card_print_id)
+    return _row_response(request, catalog, collection.get_item(item_id))
+
+
+@router.get("/{item_id}/rarity-options", response_class=HTMLResponse)
+def rarity_options(
+    item_id: int, request: Request, collection: CollectionServiceDep
+) -> HTMLResponse:
+    item = collection.get_item(item_id)
+    rarities = collection.rarities_for_pending_item(item_id)
+    templates = request.app.state.templates
+    return templates.TemplateResponse(
+        request,
+        "partials/rarity_options.html",
+        {"item": item, "rarities": rarities},
+    )
+
+
+@router.post("/{item_id}/rarity", response_class=HTMLResponse)
+def set_rarity(
+    item_id: int,
+    request: Request,
+    collection: CollectionServiceDep,
+    catalog: CatalogServiceDep,
+    rarity: Annotated[str, Form()],
+) -> HTMLResponse:
+    collection.resolve_rarity(item_id, rarity)
     return _row_response(request, catalog, collection.get_item(item_id))
 
 

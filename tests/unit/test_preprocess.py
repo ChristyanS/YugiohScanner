@@ -115,10 +115,10 @@ class TestRegions:
         box = BoundingBox(0.0, 0.0, 1.5, 1.5)
         assert box.to_pixels(100, 200) == (0, 0, 100, 200)
 
-    def test_prepare_produces_the_three_regions(self, tmp_path: Path) -> None:
+    def test_prepare_produces_the_four_regions(self, tmp_path: Path) -> None:
         prepared = prepare_image(make_card_image(tmp_path / "c.jpg"), max_pixels=MAX_PIXELS)
         try:
-            assert set(prepared.regions) == {"name", "code", "full"}
+            assert set(prepared.regions) == {"name", "code", "passcode", "full"}
             assert all(image.mode == "L" for image in prepared.regions.values())
         finally:
             prepared.close()

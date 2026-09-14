@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import re
 
-from PIL import Image
+from PIL import Image, ImageFilter, ImageStat
 
 from .preprocess import BoundingBox, ImageError, detect_card_bounds
 
@@ -181,6 +181,45 @@ def manual_grid_cells(image: Image.Image, rows: int, cols: int) -> list[Bounding
         for row in range(rows)
         for col in range(cols)
     ]
+
+
+#: Limiares conservadores — o viés é sempre a favor de "não é vazio": um
+#: "manter" falso só custa um OCR gasto à toa (como hoje), um "descartar"
+#: falso perderia uma carta real.
+_BLANK_STD_DEV_MAX = 8.0
+_BLANK_EDGE_MEAN_MAX = 4.0
+
+
+def is_cell_blank(
+    image: Image.Image,
+    box: BoundingBox,
+    *,
+    std_dev_max: float = _BLANK_STD_DEV_MAX,
+    edge_mean_max: float = _BLANK_EDGE_MEAN_MAX,
+) -> bool:
+    """Uma célula de grade sem carta nenhuma — mesa do scanner vazia.
+
+    Só se aplica ao layout manual (`--grid-size`): o usuário informa o
+    layout que sabe existir, mas a página física pode ter menos cartas que
+    células (ex.: 7 cartas numa disposição de grade 3x3). Uma célula vazia é
+    lisa (baixo desvio-padrão de cinza) e sem bordas (baixa densidade de
+    borda via `ImageFilter.FIND_EDGES`) — uma carta de verdade, mesmo mal
+    iluminada, tem texto e arte que produzem as duas coisas.
+    """
+    width, height = image.size
+    left = int(box.left * width)
+    top = int(box.top * height)
+    right = int(box.right * width)
+    bottom = int(box.bottom * height)
+    if right <= left or bottom <= top:
+        return False
+
+    cell = image.crop((left, top, right, bottom)).convert("L")
+    std_dev = ImageStat.Stat(cell).stddev[0]
+    if std_dev > std_dev_max:
+        return False
+    edge_mean = ImageStat.Stat(cell.filter(ImageFilter.FIND_EDGES)).mean[0]
+    return edge_mean <= edge_mean_max
 
 
 def _iou(a: tuple[int, int, int, int], b: tuple[int, int, int, int]) -> float:
