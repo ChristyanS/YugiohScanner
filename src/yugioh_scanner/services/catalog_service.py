@@ -13,13 +13,14 @@ fallback silencioso para inglês quando a tradução não existe (sync rodado co
 
 from __future__ import annotations
 
+import datetime as dt
 from collections.abc import Sequence
 from dataclasses import dataclass
 
 from sqlalchemy.orm import Session
 
 from ..db.tables import ALT_NAME_LANGUAGES, Card, CardAltName, CardPrint, CardSet
-from ..errors import CardNotFoundError
+from ..errors import CardNotFoundError, InvalidSetDataError, SetAlreadyExistsError
 from ..repositories.cards import CardRepository
 from ..repositories.sets import SetRepository
 
@@ -30,15 +31,29 @@ from ..repositories.sets import SetRepository
 DISPLAY_LANGUAGES = ("EN", *ALT_NAME_LANGUAGES)
 
 
-def resolve_display_language(raw: str | None) -> str:
+#: Mapa idioma de exibição -> colação SQLite registrada em `db/engine.py`
+#: (plano de idioma global). Só `PT` ganhou tratamento de acento dedicado
+#: nesta primeira entrega; todo o resto cai na colação `EN` (case-insensitive
+#: simples) em vez de deixar sem colação nenhuma.
+_SORT_COLLATION_BY_LANGUAGE = {"PT": "PT_BR"}
+
+
+def sort_collation_for_language(lang: str) -> str:
+    return _SORT_COLLATION_BY_LANGUAGE.get(lang, "EN")
+
+
+def resolve_display_language(raw: str | None, *, default: str = "EN") -> str:
     """Normaliza um valor vindo de query string para um idioma válido.
 
     Qualquer coisa fora de `DISPLAY_LANGUAGES` (ausente, minúsculo, idioma
-    que a API não traduz) cai em `"EN"` em vez de propagar erro — é um
+    que a API não traduz) cai em `default` em vez de propagar erro — é um
     parâmetro de exibição, não uma entrada que mereça 400 se vier errada.
+    `default` normalmente vem de `SettingsService.get_default_card_language()`
+    (plano de idioma global) — quem chama sem passar nada continua caindo em
+    `"EN"`, comportamento anterior preservado.
     """
-    lang = (raw or "EN").upper()
-    return lang if lang in DISPLAY_LANGUAGES else "EN"
+    lang = (raw or default).upper()
+    return lang if lang in DISPLAY_LANGUAGES else default
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,8 +79,12 @@ class CatalogService:
         set_prefix: str | None = None,
         limit: int = 50,
         offset: int = 0,
+        locale: str = "EN",
+        lang: str = "EN",
     ) -> list[Card]:
-        return self.cards.search(query, set_prefix=set_prefix, limit=limit, offset=offset)
+        return self.cards.search(
+            query, set_prefix=set_prefix, limit=limit, offset=offset, locale=locale, lang=lang
+        )
 
     def get_card(self, card_id: int) -> Card:
         card = self.cards.get(card_id)
@@ -81,6 +100,29 @@ class CatalogService:
 
     def list_sets(self, *, limit: int = 1000, offset: int = 0) -> list[CardSet]:
         return self.sets.list_all(limit=limit, offset=offset)
+
+    def register_set(
+        self,
+        set_code: str,
+        set_name: str,
+        *,
+        num_of_cards: int | None = None,
+        tcg_date: dt.date | None = None,
+    ) -> CardSet:
+        """Cadastro manual de um set que o sync ainda não trouxe (tela de
+        Revisão: "Set não encontrado? Cadastrar manualmente").
+
+        É CREATE, não upsert: um `set_code` já existente é erro, não
+        atualização — um typo digitado à mão nunca deve sobrescrever dado
+        que já veio do catálogo sincronizado.
+        """
+        code = set_code.strip().upper()
+        name = set_name.strip()
+        if not code or not name:
+            raise InvalidSetDataError("Código e nome do set são obrigatórios.")
+        if self.sets.get(code) is not None:
+            raise SetAlreadyExistsError(code)
+        return self.sets.create(code, name, num_of_cards=num_of_cards, tcg_date=tcg_date)
 
     # --------------------------------------------------------- multilíngue
 

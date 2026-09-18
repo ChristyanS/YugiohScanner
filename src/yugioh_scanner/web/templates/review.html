@@ -1,66 +1,69 @@
 {% extends "base.html" %}
-{% block title %}Revisão — Yu-Gi-Oh! Scanner{% endblock %}
+{% block title %}{{ t('review.title') }} — Yu-Gi-Oh! Scanner{% endblock %}
 {% block content %}
-<h1>Revisão</h1>
-<p class="kbd-hint"><kbd>1</kbd>-<kbd>5</kbd> escolhe candidato &middot; <kbd>Enter</kbd> confirma &middot; <kbd>S</kbd> pula &middot; <kbd>X</kbd> rejeita &middot; <kbd>&rarr;</kbd> próxima</p>
+<h1>{{ t('review.title') }}</h1>
+<p class="kbd-hint"><kbd>1</kbd>-<kbd>5</kbd> {{ t('review.kbd_pick') }} &middot; <kbd>Enter</kbd> {{ t('review.kbd_confirm') }} &middot; <kbd>S</kbd> {{ t('review.kbd_skip') }} &middot; <kbd>X</kbd> {{ t('review.kbd_reject') }} &middot; <kbd>&rarr;</kbd> {{ t('review.kbd_next') }}</p>
 
-<div id="empty-state" hidden><p><em>Nada pendente. 🎉</em></p></div>
+<div id="empty-state" hidden><p><em>{{ t('review.empty_state') }}</em></p></div>
 <p id="counter"></p>
 
 <div id="review-body" class="review-grid" hidden>
   <div>
     <div id="photo-wrap" class="photo-wrap">
-      <img id="photo" class="roi" alt="Foto original">
+      <img id="photo" class="roi" alt="{{ t('review.photo_alt') }}">
     </div>
     <p id="crop-label" class="crop-label" hidden></p>
-    <p><strong>OCR — nome:</strong> <span id="ocr-name"></span></p>
-    <p><strong>OCR — código:</strong> <span id="ocr-code"></span></p>
-    <p><strong>OCR — Card ID:</strong> <span id="ocr-passcode"></span></p>
-    <p id="passcode-badge" class="selected-label" hidden>✓ identificado pelo Card ID — sinal mais confiável que nome/código</p>
+    <p><strong>{{ t('review.ocr_name_label') }}</strong> <span id="ocr-name"></span></p>
+    <p><strong>{{ t('review.ocr_code_label') }}</strong> <span id="ocr-code"></span></p>
+    <p><strong>{{ t('review.ocr_passcode_label') }}</strong> <span id="ocr-passcode"></span></p>
+    <p id="passcode-badge" class="selected-label" hidden>{{ t('review.passcode_badge') }}</p>
   </div>
   <div>
-    <h3>Candidatos</h3>
-    <p id="candidates-hint" class="kbd-hint" hidden>Nome não identificado pelo OCR — a sugestão abaixo vem do Card ID/set code lido.</p>
+    <h3>{{ t('review.candidates_heading') }}</h3>
+    <p id="candidates-hint" class="kbd-hint" hidden>{{ t('review.candidates_hint') }}</p>
     <ul id="candidates" class="candidate-list"></ul>
 
     <details id="manual-search">
-      <summary>Nenhum candidato é a carta certa? Buscar manualmente</summary>
-      <input type="search" id="manual-search-input" placeholder="Nome da carta...">
+      <summary>{{ t('review.manual_search_summary') }}</summary>
+      <input type="search" id="manual-search-input" placeholder="{{ t('review.manual_search_placeholder') }}">
       <ul id="manual-search-results" class="candidate-list"></ul>
     </details>
 
     <p id="selected-label" class="selected-label"></p>
 
     <div id="print-section" hidden>
-      <label>Set
-        <input type="search" id="print-search" placeholder="Buscar set (código, nome, raridade, região)...">
-        <select id="print-select"></select>
+      <label>{{ t('review.set_label') }}
+        <input type="search" id="print-search" placeholder="{{ t('review.print_search_placeholder') }}">
+        <select id="set-select"></select>
       </label>
       <small id="print-count"></small>
-      <small id="print-auto-hint" hidden>Set detectado automaticamente pelo código lido.</small>
-      <label id="rarity-unlisted-wrap" hidden>
-        <input type="checkbox" id="rarity-unlisted-check"> Raridade real não está nesta lista
+      <label>{{ t('review.rarity_field_label') }}
+        <select id="rarity-select"></select>
       </label>
-      <input type="text" id="rarity-unlisted-input" placeholder="Digite a raridade impressa na carta" hidden>
+      <small id="print-auto-hint" hidden>{{ t('review.print_auto_hint') }}</small>
+      <label id="rarity-unlisted-wrap" hidden>
+        <input type="checkbox" id="rarity-unlisted-check"> {{ t('review.rarity_unlisted_label') }}
+      </label>
+      <input type="text" id="rarity-unlisted-input" placeholder="{{ t('review.rarity_unlisted_placeholder') }}" hidden>
+      <label><input type="checkbox" id="set-unknown-check"> {{ t('review.set_unknown_label') }}</label>
+      <div id="set-create-form" hidden>
+        <input type="text" id="new-set-code" placeholder="{{ t('review.new_set_code_placeholder') }}">
+        <input type="text" id="new-set-name" placeholder="{{ t('review.new_set_name_placeholder') }}">
+        <button type="button" id="new-set-submit" class="secondary">{{ t('review.new_set_submit') }}</button>
+        <small id="new-set-error"></small>
+      </div>
     </div>
 
-    <label>Idioma da carta física
-      <select id="language-select">
-        {% for code in languages %}
-        <option value="{{ code }}">{{ code }}</option>
-        {% endfor %}
-      </select>
-    </label>
     <small id="language-hint" hidden></small>
 
-    <label>Quantidade
+    <label>{{ t('review.quantity_label') }}
       <input type="number" id="quantity" value="1" min="1">
     </label>
 
     <div class="grid">
-      <button id="btn-confirm">Confirmar (Enter)</button>
-      <button id="btn-skip" class="secondary">Pular (S)</button>
-      <button id="btn-reject" class="contrast outline">Rejeitar (X)</button>
+      <button id="btn-confirm">{{ t('review.confirm_button') }}</button>
+      <button id="btn-skip" class="secondary">{{ t('review.skip_button') }}</button>
+      <button id="btn-reject" class="contrast outline">{{ t('review.reject_button') }}</button>
     </div>
     <div id="review-error"></div>
   </div>
@@ -89,10 +92,10 @@ const candidatesEl = document.getElementById("candidates");
 const candidatesHint = document.getElementById("candidates-hint");
 const printSection = document.getElementById("print-section");
 const printSearch = document.getElementById("print-search");
-const printSelect = document.getElementById("print-select");
+const setSelect = document.getElementById("set-select");
+const raritySelect = document.getElementById("rarity-select");
 const printCount = document.getElementById("print-count");
 const printAutoHint = document.getElementById("print-auto-hint");
-const languageSelect = document.getElementById("language-select");
 const languageHint = document.getElementById("language-hint");
 const quantityInput = document.getElementById("quantity");
 const errorBox = document.getElementById("review-error");
@@ -103,6 +106,12 @@ const selectedLabel = document.getElementById("selected-label");
 const rarityUnlistedWrap = document.getElementById("rarity-unlisted-wrap");
 const rarityUnlistedCheck = document.getElementById("rarity-unlisted-check");
 const rarityUnlistedInput = document.getElementById("rarity-unlisted-input");
+const setUnknownCheck = document.getElementById("set-unknown-check");
+const setCreateForm = document.getElementById("set-create-form");
+const newSetCode = document.getElementById("new-set-code");
+const newSetName = document.getElementById("new-set-name");
+const newSetSubmit = document.getElementById("new-set-submit");
+const newSetError = document.getElementById("new-set-error");
 let manualSearchTimer = null;
 //: Set já identificado (pelo código lido) mesmo quando a raridade ainda não
 //: foi escolhida — permite gravar "sei o set, raridade pendente" em vez de
@@ -141,7 +150,7 @@ function current() { return queue[index]; }
 function updateCropOverlay(r) {
   if (r.crop_count > 1 && r.source_bbox) {
     cropLabel.hidden = false;
-    cropLabel.textContent = `Carta ${r.crop_index + 1} de ${r.crop_count} nesta foto`;
+    cropLabel.textContent = t("review.crop_label", { index: r.crop_index + 1, total: r.crop_count });
     const box = r.source_bbox;
     const boxWidth = box.right - box.left;
     const boxHeight = box.bottom - box.top;
@@ -170,18 +179,18 @@ function render() {
   }
   emptyState.hidden = true;
   body.hidden = false;
-  counter.textContent = `${index + 1} de ${queue.length}`;
+  counter.textContent = t("review.counter", { current: index + 1, total: queue.length });
 
   const r = current();
   photo.src = `/api/v1/scan-images/${r.image.id}/file`;
   updateCropOverlay(r);
-  ocrName.textContent = r.ocr_name_raw || "(vazio)";
-  ocrCode.textContent = r.ocr_code_raw || "(vazio)";
+  ocrName.textContent = r.ocr_name_raw || t("review.empty_value");
+  ocrCode.textContent = r.ocr_code_raw || t("review.empty_value");
   // Prefere a versão limpa (só dígitos — `domain/passcode.py::clean_passcode`)
   // à leitura bruta: o passcode só pode ser número, e o bruto às vezes vem
   // colado com "1ª Edição"/copyright (achado real: a ROI precisa de folga
   // vertical, e essa folga pega a linha de baixo em algumas fotos).
-  ocrPasscode.textContent = r.passcode_clean || r.ocr_passcode_raw || "(vazio)";
+  ocrPasscode.textContent = r.passcode_clean || r.ocr_passcode_raw || t("review.empty_value");
   passcodeBadge.hidden = !r.passcode_verified;
   quantityInput.value = 1;
   selectedCandidate = null;
@@ -189,20 +198,23 @@ function render() {
   currentPrints = [];
   resolvedSetCode = null;
   printSection.hidden = true;
-  printSelect.innerHTML = "";
+  setSelect.innerHTML = "";
+  raritySelect.innerHTML = "";
   printSearch.value = "";
   printCount.textContent = "";
   rarityUnlistedWrap.hidden = true;
   rarityUnlistedCheck.checked = false;
   rarityUnlistedInput.hidden = true;
   rarityUnlistedInput.value = "";
+  setUnknownCheck.checked = false;
+  setCreateForm.hidden = true;
+  newSetCode.value = "";
+  newSetName.value = "";
+  newSetError.textContent = "";
   manualSearchDetails.open = false;
   manualSearchInput.value = "";
   manualSearchResults.innerHTML = "";
   selectedLabel.textContent = "";
-  // Pré-seleciona o idioma que o matching detectou sozinho (nome casou por
-  // `card_alt_name` — plano de idiomas) — a pessoa confirma ou corrige.
-  languageSelect.value = r.detected_language || "EN";
   languageHint.hidden = true;
 
   // O nome pode não render candidato nenhum (comum em cartas JP/CJK — o
@@ -216,7 +228,7 @@ function render() {
   const hasRealCandidates = !!(r.candidates && r.candidates.length);
   const effectiveCandidates = hasRealCandidates
     ? r.candidates
-    : (r.card_id ? [{ card_id: r.card_id, name: r.card_name || `Carta #${r.card_id}`, score: r.confidence }] : []);
+    : (r.card_id ? [{ card_id: r.card_id, name: r.card_name || t("review.card_fallback", { id: r.card_id }), score: r.confidence }] : []);
   candidatesHint.hidden = hasRealCandidates || !effectiveCandidates.length;
 
   candidatesEl.innerHTML = "";
@@ -269,34 +281,77 @@ function codePrintsForCard(cardId) {
 //: é exatamente o problema que a busca resolve (achado real do usuário).
 const PRINT_OPTIONS_CAP = 50;
 
-function renderPrintOptions(filterText) {
+// Set e Raridade em cascata (plano de revisão §2.3): antes era um único
+// `<select>` combinando "{set} — {raridade}"; agora o Set lista só códigos
+// únicos de `currentPrints`, e a Raridade (`renderRarityOptions`) só mostra
+// as raridades que existem **para o set escolhido** — nunca a lista inteira
+// de raridades da carta, que costuma incluir sets sem nenhuma relação.
+function renderSetOptions(filterText) {
   const q = (filterText || "").trim().toLowerCase();
-  const matches = !q
-    ? currentPrints
-    : currentPrints.filter((p) => {
-        const haystack = `${p.set_code} ${p.rarity || ""} ${p.region || ""}`.toLowerCase();
-        return haystack.includes(q);
-      });
-  const truncated = !q && matches.length > PRINT_OPTIONS_CAP;
-  const shown = truncated ? matches.slice(0, PRINT_OPTIONS_CAP) : matches;
+  const bySetCode = new Map();
+  for (const p of currentPrints) {
+    if (!bySetCode.has(p.set_code)) bySetCode.set(p.set_code, p);
+  }
+  let sets = [...bySetCode.values()];
+  if (q) {
+    sets = sets.filter((p) => `${p.set_code} ${p.set_name || ""} ${p.region || ""}`.toLowerCase().includes(q));
+  }
+  sets.sort((a, b) => a.set_code.localeCompare(b.set_code));
 
-  const previous = selectedPrint;
-  printSelect.innerHTML = '<option value="">(set indefinido)</option>' +
-    shown.map(p => `<option value="${p.id}">${p.set_code} — ${p.rarity || "?"}${p.region ? " [" + p.region + "]" : ""}</option>`).join("");
+  const truncated = !q && sets.length > PRINT_OPTIONS_CAP;
+  const shown = truncated ? sets.slice(0, PRINT_OPTIONS_CAP) : sets;
+
+  const previous = setSelect.value;
+  setSelect.innerHTML = `<option value="">${t("common.print_undefined_option")}</option>` +
+    shown.map((p) => `<option value="${p.set_code}">${p.set_code}${p.region ? " [" + p.region + "]" : ""}</option>`).join("");
   // Preserva a seleção atual se ela ainda estiver na lista filtrada.
-  if (previous && shown.some((p) => String(p.id) === previous)) {
-    printSelect.value = previous;
+  if (previous && shown.some((p) => p.set_code === previous)) {
+    setSelect.value = previous;
   }
   printCount.textContent = truncated
-    ? `Mostrando ${shown.length} de ${matches.length} — digite para refinar.`
-    : `${matches.length} set(s) encontrado(s).`;
+    ? t("common.print_options_truncated", { shown: shown.length, total: sets.length })
+    : t("common.print_options_count", { count: sets.length });
+}
+
+// Popula a Raridade com só as raridades do set escolhido. `preferredPrintId`
+// (quando o código lido resolveu para um print específico) força essa
+// seleção mesmo com 2+ raridades catalogadas; sem ele, só auto-seleciona
+// quando existe exatamente 1 raridade (sem ambiguidade nenhuma pra resolver).
+function renderRarityOptions(setCode, preferredPrintId) {
+  const matches = setCode ? currentPrints.filter((p) => p.set_code === setCode) : [];
+  raritySelect.innerHTML = `<option value="">${t("rarity_options.choose_rarity_option")}</option>` +
+    matches.map((p) => `<option value="${p.id}">${p.rarity || "?"}${p.region ? " [" + p.region + "]" : ""}</option>`).join("");
+  let chosen = "";
+  if (preferredPrintId && matches.some((p) => String(p.id) === String(preferredPrintId))) {
+    chosen = String(preferredPrintId);
+  } else if (matches.length === 1) {
+    chosen = String(matches[0].id);
+  }
+  raritySelect.value = chosen;
+  selectedPrint = chosen || null;
 }
 
 let printSearchTimer = null;
 printSearch.addEventListener("input", () => {
   clearTimeout(printSearchTimer);
-  printSearchTimer = setTimeout(() => renderPrintOptions(printSearch.value), 200);
+  printSearchTimer = setTimeout(() => renderSetOptions(printSearch.value), 200);
 });
+
+function onSetChange() {
+  printAutoHint.hidden = true;
+  rarityUnlistedCheck.checked = false;
+  rarityUnlistedInput.hidden = true;
+  renderRarityOptions(setSelect.value);
+}
+setSelect.addEventListener("change", onSetChange);
+
+function onRarityChange() {
+  selectedPrint = raritySelect.value || null;
+  printAutoHint.hidden = true;
+  rarityUnlistedCheck.checked = false;
+  rarityUnlistedInput.hidden = true;
+}
+raritySelect.addEventListener("change", onRarityChange);
 
 async function selectCard(cardId, candidate) {
   selectedCandidate = candidate;
@@ -304,13 +359,13 @@ async function selectCard(cardId, candidate) {
   // muda nada acima da dobra (o destaque fica só na lista, que pode já estar
   // fora da vista) e parece que o clique não fez nada (achado real do
   // usuário: "clico e não consigo escolher a carta").
-  selectedLabel.textContent = `Selecionado: ${candidate.name}`;
+  selectedLabel.textContent = t("review.selected_label", { name: candidate.name });
 
   const res = await fetch(`/api/v1/cards/${cardId}`);
   const card = await res.json();
   currentPrints = card.prints;
   printSearch.value = "";
-  renderPrintOptions("");
+  renderSetOptions("");
   printSection.hidden = false;
 
   // O código lido tem prioridade sobre o nome (mesma regra do motor de
@@ -320,36 +375,40 @@ async function selectCard(cardId, candidate) {
   let auto = "";
   if (codeMatches.length === 1) {
     const match = currentPrints.find((p) => p.id === codeMatches[0].print_id);
-    if (match) auto = String(match.id);
+    if (match) {
+      setSelect.value = match.set_code;
+      renderRarityOptions(match.set_code, match.id);
+      auto = String(match.id);
+    } else {
+      renderRarityOptions("");
+    }
   } else if (codeMatches.length > 1) {
-    // Mesmo código, várias raridades (ex.: Rarity Collection) — a escolha é
-    // do usuário, mas filtra a busca pelo próprio código lido para não
-    // obrigar a rolar entre dezenas de sets pra achar as opções certas.
-    printSearch.value = codeMatches[0].set_code;
-    renderPrintOptions(codeMatches[0].set_code);
+    // Mesmo código, várias raridades (ex.: Rarity Collection) — o Set já dá
+    // para preencher sozinho; a Raridade fica em aberto para o usuário
+    // escolher entre as catalogadas para este set.
+    setSelect.value = codeMatches[0].set_code;
+    renderRarityOptions(codeMatches[0].set_code);
+  } else {
+    renderRarityOptions("");
   }
   // O set já está identificado pelo código, com raridade resolvida (1 match)
   // ou pendente entre catalogadas (2+) — ambos os casos guardam o set para
   // que "raridade não catalogada" ainda não perca essa informação.
   resolvedSetCode = codeMatches.length ? codeMatches[0].set_code : null;
   rarityUnlistedWrap.hidden = !resolvedSetCode;
-  printSelect.value = auto;
-  selectedPrint = auto || null;
   printAutoHint.hidden = !auto;
-  printSelect.onchange = () => {
-    selectedPrint = printSelect.value || null;
-    printAutoHint.hidden = true;
-    rarityUnlistedCheck.checked = false;
-    rarityUnlistedInput.hidden = true;
-  };
   // Se a carta física já foi detectada num idioma que tem print distinto no
   // catálogo (ADR 0009/0012 — ver `matching/print_language.py`), troca a
   // seleção automática do código pela seleção do idioma certo.
   applyLanguageFilter();
 }
 
+// Idioma físico não é mais um campo editável na revisão (era legado de
+// antes do catálogo ter sets por idioma) — usa direto o que o matching
+// detectou sozinho (`ScanResult.detected_language`, casado por
+// `card_alt_name`); a pessoa não escolhe mais isso manualmente.
 function applyLanguageFilter() {
-  const lang = languageSelect.value;
+  const lang = current().detected_language || "EN";
   languageHint.hidden = true;
   if (lang === "EN" || !currentPrints.length) return;
   if (selectedPrint) {
@@ -376,24 +435,72 @@ function applyLanguageFilter() {
     // Filtra pelo próprio código do print detectado: garante que ele exista
     // na lista renderizada mesmo se estiver fora do teto de exibição padrão.
     printSearch.value = match.set_code;
-    renderPrintOptions(match.set_code);
-    printSelect.value = String(match.id);
-    selectedPrint = String(match.id);
+    renderSetOptions(match.set_code);
+    setSelect.value = match.set_code;
+    renderRarityOptions(match.set_code, match.id);
     printAutoHint.hidden = true;
   } else {
     languageHint.hidden = false;
-    languageHint.textContent = `Sem print específico em ${lang} no catálogo — o mesmo código serve para qualquer idioma.`;
+    languageHint.textContent = t("review.language_hint", { lang });
   }
 }
-
-languageSelect.addEventListener("change", applyLanguageFilter);
 
 rarityUnlistedCheck.addEventListener("change", () => {
   rarityUnlistedInput.hidden = !rarityUnlistedCheck.checked;
   if (rarityUnlistedCheck.checked) {
-    printSelect.value = "";
+    raritySelect.value = "";
     selectedPrint = null;
     rarityUnlistedInput.focus();
+  }
+});
+
+setUnknownCheck.addEventListener("change", () => {
+  setCreateForm.hidden = !setUnknownCheck.checked;
+  newSetError.textContent = "";
+  if (setUnknownCheck.checked) newSetCode.focus();
+});
+
+newSetSubmit.addEventListener("click", async () => {
+  const code = newSetCode.value.trim();
+  const name = newSetName.value.trim();
+  if (!code || !name) { newSetError.textContent = t("review.new_set_fill_required"); return; }
+  newSetSubmit.disabled = true;
+  newSetError.textContent = "";
+  try {
+    const res = await fetch("/api/v1/sets", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ set_code: code, set_name: name }),
+    });
+    const payload = await res.json();
+    if (!res.ok) { newSetError.textContent = payload.error || t("review.new_set_failed"); return; }
+    // Set cadastrado, mas sem print (número/raridade exatos ainda são
+    // desconhecidos) — reaproveita o mesmo estado de "raridade pendente" já
+    // usado quando o set é conhecido mas a raridade real não está catalogada.
+    // Sem prints reais em `currentPrints` para este set novo, insere e
+    // seleciona a opção manualmente em `#set-select` só para refletir a
+    // escolha na tela.
+    resolvedSetCode = payload.set_code;
+    if (![...setSelect.options].some((o) => o.value === payload.set_code)) {
+      const opt = document.createElement("option");
+      opt.value = payload.set_code;
+      opt.textContent = payload.set_code;
+      setSelect.appendChild(opt);
+    }
+    setSelect.value = payload.set_code;
+    raritySelect.innerHTML = `<option value="">${t("rarity_options.choose_rarity_option")}</option>`;
+    selectedPrint = null;
+    printAutoHint.hidden = true;
+    rarityUnlistedWrap.hidden = false;
+    rarityUnlistedCheck.checked = true;
+    rarityUnlistedInput.hidden = false;
+    setCreateForm.hidden = true;
+    setUnknownCheck.checked = false;
+    rarityUnlistedInput.focus();
+  } catch (err) {
+    newSetError.textContent = t("review.new_set_failed");
+  } finally {
+    newSetSubmit.disabled = false;
   }
 });
 
@@ -403,7 +510,7 @@ async function runManualSearch(query) {
   const cards = await res.json();
   manualSearchResults.innerHTML = "";
   if (!cards.length) {
-    manualSearchResults.innerHTML = "<li><em>Nenhuma carta encontrada.</em></li>";
+    manualSearchResults.innerHTML = `<li><em>${t("common.no_cards_found")}</em></li>`;
     return;
   }
   cards.forEach((card) => {
@@ -423,17 +530,18 @@ manualSearchInput.addEventListener("input", () => {
 
 async function confirmCurrent() {
   const r = current();
-  if (!r || !selectedCandidate) { showError("Escolha um candidato."); return; }
+  if (!r || !selectedCandidate) { showError(t("review.choose_candidate")); return; }
   const rarityUnlisted = !rarityUnlistedWrap.hidden && rarityUnlistedCheck.checked;
   if (rarityUnlisted && !rarityUnlistedInput.value.trim()) {
-    showError("Digite a raridade, ou desmarque a opção.");
+    showError(t("review.enter_rarity"));
     return;
   }
+  // `language` fica de fora: o serviço já cai para `ScanResult.detected_language`
+  // quando omitido — a revisão não tem mais o campo manual (era legado).
   const body = {
     card_id: selectedCandidate.card_id,
     card_print_id: selectedPrint ? parseInt(selectedPrint, 10) : null,
     quantity: parseInt(quantityInput.value, 10) || 1,
-    language: languageSelect.value,
   };
   if (rarityUnlisted) {
     // Set conhecido, raridade real não catalogada: grava os dois como
@@ -449,7 +557,7 @@ async function confirmCurrent() {
     body: JSON.stringify(body),
   });
   const payload = await res.json();
-  if (!res.ok) { showError(payload.error || "Falha ao confirmar"); return; }
+  if (!res.ok) { showError(payload.error || t("review.confirm_failed")); return; }
   advance();
 }
 
@@ -457,7 +565,7 @@ async function rejectCurrent() {
   const r = current();
   if (!r) return;
   const res = await fetch(`/api/v1/scan-results/${r.id}/reject`, { method: "POST" });
-  if (!res.ok) { const payload = await res.json(); showError(payload.error || "Falha ao rejeitar"); return; }
+  if (!res.ok) { const payload = await res.json(); showError(payload.error || t("review.reject_failed")); return; }
   advance();
 }
 

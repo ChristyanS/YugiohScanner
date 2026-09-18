@@ -2,21 +2,21 @@
 {% block title %}Scan #{{ job.id }} — Yu-Gi-Oh! Scanner{% endblock %}
 {% block content %}
 <h1>Scan #{{ job.id }}</h1>
-<p><a href="/scan">&larr; novo scan</a></p>
+<p><a href="/scan">{{ t('scan_detail.back_link') }}</a></p>
 
 <div class="metric-grid">
-  <article class="metric-card"><span class="value">{{ job.processed }}</span><span class="label">processadas</span></article>
-  <article class="metric-card"><span class="value">{{ job.auto_added }}</span><span class="label">auto</span></article>
-  <article class="metric-card"><span class="value">{{ job.pending }}</span><span class="label">pendentes</span></article>
-  <article class="metric-card"><span class="value">{{ job.failed }}</span><span class="label">falhas</span></article>
-  <article class="metric-card"><span class="value">{{ job.skipped }}</span><span class="label">puladas</span></article>
+  <article class="metric-card"><span class="value">{{ job.processed }}</span><span class="label">{{ t('scan_detail.metric_processed') }}</span></article>
+  <article class="metric-card"><span class="value">{{ job.auto_added }}</span><span class="label">{{ t('scan_detail.metric_auto') }}</span></article>
+  <article class="metric-card"><span class="value">{{ job.pending }}</span><span class="label">{{ t('scan_detail.metric_pending') }}</span></article>
+  <article class="metric-card"><span class="value">{{ job.failed }}</span><span class="label">{{ t('scan_detail.metric_failed') }}</span></article>
+  <article class="metric-card"><span class="value">{{ job.skipped }}</span><span class="label">{{ t('scan_detail.metric_skipped') }}</span></article>
 </div>
 
-<p><strong>Pasta:</strong> {{ job.folder_path }} &middot; <strong>Provider:</strong> {{ job.ocr_provider }} &middot; <strong>Status:</strong> {{ job.status }}</p>
+<p><strong>{{ t('scan_detail.folder_label') }}</strong> {{ job.folder_path }} &middot; <strong>{{ t('scan_detail.provider_label') }}</strong> {{ job.ocr_provider }} &middot; <strong>{{ t('scan_detail.status_label') }}</strong> {{ job.status }}</p>
 
 <figure>
 <table>
-  <thead><tr><th>Foto</th><th>Texto OCR</th><th>Código</th><th>Recorte</th><th>Decisão</th><th>Confiança</th><th>Aplicado</th></tr></thead>
+  <thead><tr><th>{{ t('scan_detail.table_photo') }}</th><th>{{ t('scan_detail.table_ocr_text') }}</th><th>{{ t('scan_detail.table_code') }}</th><th>{{ t('scan_detail.table_crop') }}</th><th>{{ t('scan_detail.table_decision') }}</th><th>{{ t('scan_detail.table_confidence') }}</th><th>{{ t('scan_detail.table_applied') }}</th></tr></thead>
   <tbody>
     {% for r in results %}
     {% set is_group_start = loop.previtem is defined and loop.previtem.scan_image_id != r.scan_image_id %}
@@ -24,7 +24,7 @@
     <tr{% if is_group_start %} class="group-start"{% endif %}>
       <td>
         <div class="photo-wrap thumb{% if cropped %} cropped{% endif %}">
-          <img class="roi" loading="lazy" alt="{{ r.card_name or r.ocr_name_raw or 'carta escaneada' }}"
+          <img class="roi" loading="lazy" alt="{{ r.card_name or r.ocr_name_raw or t('scan_detail.scanned_card_alt') }}"
                src="/api/v1/scan-images/{{ r.scan_image_id }}/file"
                {%- if cropped %}
                {%- set bw = r.source_bbox.right - r.source_bbox.left %}
@@ -38,13 +38,13 @@
       <td>{{ "%d/%d"|format(r.crop_index + 1, r.crop_count) if r.crop_count > 1 else "—" }}</td>
       <td><span class="badge badge-{{ r.decision }}">{{ r.decision }}</span></td>
       <td>{{ "%.0f"|format(r.confidence * 100) }}%</td>
-      <td>{{ "sim" if r.applied else "não" }}</td>
+      <td>{{ t('common.yes') if r.applied else t('common.no') }}</td>
     </tr>
     {% endfor %}
   </tbody>
 </table>
 </figure>
 {% if job.pending > 0 %}
-<p><a href="/review" role="button">Revisar pendências</a></p>
+<p><a href="/review" role="button">{{ t('scan_detail.review_pending_link') }}</a></p>
 {% endif %}
 {% endblock %}

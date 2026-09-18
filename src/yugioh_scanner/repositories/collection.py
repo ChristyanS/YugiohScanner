@@ -16,7 +16,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, ClassVar
 
-from sqlalchemy import and_, exists, or_, select
+from sqlalchemy import and_, exists, func, or_, select
 from sqlalchemy.orm import Session
 
 from ..db.tables import (
@@ -94,6 +94,14 @@ class CollectionRepository:
         return list(
             self.session.scalars(select(CollectionItem).where(CollectionItem.card_id == card_id))
         )
+
+    def total_owned(self, card_id: int) -> int:
+        """Soma de cópias possuídas de uma carta, em qualquer print/condição/
+        edição/idioma — o teto do modo "só coleção" do Deck Builder."""
+        stmt = select(func.coalesce(func.sum(CollectionItem.quantity), 0)).where(
+            CollectionItem.card_id == card_id
+        )
+        return int(self.session.scalar(stmt) or 0)
 
     def count_items(self) -> int:
         return len(self.session.scalars(select(CollectionItem.id)).all())
@@ -298,9 +306,17 @@ class CollectionRepository:
         descending: bool = False,
         limit: int | None = None,
         offset: int = 0,
+        locale: str = "EN",
+        lang: str = "EN",
     ) -> list[CollectionItem]:
         """Consulta filtrada para `collection list` — a única tela que
-        precisa de busca, filtro e ordenação simultâneos (plano §11)."""
+        precisa de busca, filtro e ordenação simultâneos (plano §11).
+
+        `lang != "EN"` ordena por nome pelo texto **traduzido** (plano de
+        idioma global, fase 2), com fallback para o inglês quando a carta
+        não tem tradução naquele idioma — ver docstring equivalente em
+        `CardRepository.search()`.
+        """
         # `.outerjoin(CardPrint)` sozinho é ambíguo assim que `Card` já está na
         # query: o SQLAlchemy pode escolher `CardPrint.card_id == Card.id`
         # (TODOS os prints da carta) em vez de
@@ -348,6 +364,20 @@ class CollectionRepository:
             )
 
         column = self.SORT_COLUMNS.get(sort, Card.name)
+        if sort == "name":
+            # Colação de idioma (plano de idioma global) só faz sentido para
+            # ordenar por nome — `quantity`/`added`/`set` são numéricos/texto
+            # sem acentuação relevante. `lang != "EN"` também troca o texto
+            # usado como chave (nome traduzido em vez do nome em inglês) —
+            # sem isso, mudar o idioma de exibição só reacentuava o nome em
+            # inglês sem de fato reordenar a lista (achado real do usuário).
+            if lang != "EN":
+                stmt = stmt.outerjoin(
+                    CardAltName,
+                    and_(CardAltName.card_id == Card.id, CardAltName.language == lang),
+                )
+                column = func.coalesce(CardAltName.name, Card.name)
+            column = column.collate(locale)
         stmt = stmt.order_by(column.desc() if descending else column.asc())
 
         if limit is not None:

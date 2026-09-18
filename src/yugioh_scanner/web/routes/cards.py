@@ -16,8 +16,12 @@ from typing import Any
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse
 
-from ...services.catalog_service import DISPLAY_LANGUAGES, resolve_display_language
-from ..deps import CatalogServiceDep, CollectionServiceDep
+from ...services.catalog_service import (
+    DISPLAY_LANGUAGES,
+    resolve_display_language,
+    sort_collation_for_language,
+)
+from ..deps import CatalogServiceDep, CollectionServiceDep, SettingsServiceDep
 
 router = APIRouter()
 
@@ -29,7 +33,7 @@ _PAGE_SIZE_TABLE = 60
 _PAGE_SIZE_GALLERY = 48
 
 
-def _database_filters(request: Request) -> dict[str, Any]:
+def _database_filters(request: Request, *, default_lang: str) -> dict[str, Any]:
     q = request.query_params
     view = q.get("view") if q.get("view") in ("table", "gallery") else "table"
     try:
@@ -41,12 +45,14 @@ def _database_filters(request: Request) -> dict[str, Any]:
         "set_prefix": q.get("set") or None,
         "view": view,
         "page": page,
-        "lang": resolve_display_language(q.get("lang")),
+        "lang": resolve_display_language(q.get("lang"), default=default_lang),
     }
 
 
-def _load_database_page(request: Request, catalog: CatalogServiceDep) -> dict[str, Any]:
-    filters = _database_filters(request)
+def _load_database_page(
+    request: Request, catalog: CatalogServiceDep, settings: SettingsServiceDep
+) -> dict[str, Any]:
+    filters = _database_filters(request, default_lang=settings.get_default_card_language())
     page_size = _PAGE_SIZE_GALLERY if filters["view"] == "gallery" else _PAGE_SIZE_TABLE
 
     total = catalog.count_cards(filters["search"], set_prefix=filters["set_prefix"])
@@ -58,6 +64,8 @@ def _load_database_page(request: Request, catalog: CatalogServiceDep) -> dict[st
         set_prefix=filters["set_prefix"],
         limit=page_size,
         offset=(page - 1) * page_size,
+        locale=sort_collation_for_language(filters["lang"]),
+        lang=filters["lang"],
     )
     display_names = catalog.display_names(cards, filters["lang"])
     return {
@@ -71,23 +79,33 @@ def _load_database_page(request: Request, catalog: CatalogServiceDep) -> dict[st
 
 
 @router.get("/cards", response_class=HTMLResponse)
-def database_page(request: Request, catalog: CatalogServiceDep) -> HTMLResponse:
+def database_page(
+    request: Request, catalog: CatalogServiceDep, settings: SettingsServiceDep
+) -> HTMLResponse:
     templates = request.app.state.templates
-    context = _load_database_page(request, catalog)
+    context = _load_database_page(request, catalog, settings)
     return templates.TemplateResponse(request, "database.html", context)
 
 
 @router.get("/cards/rows", response_class=HTMLResponse)
-def database_rows(request: Request, catalog: CatalogServiceDep) -> HTMLResponse:
+def database_rows(
+    request: Request, catalog: CatalogServiceDep, settings: SettingsServiceDep
+) -> HTMLResponse:
     templates = request.app.state.templates
     return templates.TemplateResponse(
-        request, "partials/database_results.html", _load_database_page(request, catalog)
+        request,
+        "partials/database_results.html",
+        _load_database_page(request, catalog, settings),
     )
 
 
 @router.get("/cards/{card_id}", response_class=HTMLResponse)
 def card_detail(
-    card_id: int, request: Request, catalog: CatalogServiceDep, collection: CollectionServiceDep
+    card_id: int,
+    request: Request,
+    catalog: CatalogServiceDep,
+    collection: CollectionServiceDep,
+    settings: SettingsServiceDep,
 ) -> HTMLResponse:
     card = catalog.get_card(card_id)
     prints = catalog.prints_for_card(card_id)
@@ -96,7 +114,9 @@ def card_detail(
     total_owned = sum(item.quantity for item in owned)
 
     alt_names = catalog.alt_names_for_card(card_id)
-    lang = resolve_display_language(request.query_params.get("lang"))
+    lang = resolve_display_language(
+        request.query_params.get("lang"), default=settings.get_default_card_language()
+    )
     localized = catalog.localize(card, alt_names, lang)
     available_languages = {"EN", *(alt.language for alt in alt_names)}
 

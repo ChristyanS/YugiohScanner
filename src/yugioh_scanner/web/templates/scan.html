@@ -1,16 +1,16 @@
 {% extends "base.html" %}
-{% block title %}Scanner — Yu-Gi-Oh! Scanner{% endblock %}
+{% block title %}{{ t('scan.title') }} — Yu-Gi-Oh! Scanner{% endblock %}
 {% block content %}
-<h1>Scanner</h1>
+<h1>{{ t('scan.title') }}</h1>
 
 <article id="form-error"></article>
 
 <form id="scan-form">
   <div class="grid">
-    <label>Pasta no servidor
+    <label>{{ t('scan.folder_label') }}
       <input type="text" name="folder" id="folder-input" placeholder="C:\fotos\cartas" required>
     </label>
-    <label>Provider de OCR
+    <label>{{ t('scan.provider_label') }}
       <select name="provider">
         {% for p in providers %}
         <option value="{{ p }}" {% if p == default_provider %}selected{% endif %}>{{ p }}</option>
@@ -19,67 +19,63 @@
     </label>
   </div>
   <div class="grid">
-    <label><input type="checkbox" name="recursive"> Incluir subpastas</label>
-    <label><input type="checkbox" name="auto" checked> Adicionar automaticamente (confiança alta)</label>
-    <label><input type="checkbox" name="reprocess"> Reprocessar imagens já vistas</label>
-    <label><input type="checkbox" name="grid"> Detectar várias cartas por foto (grade)</label>
-    <label><input type="checkbox" name="require_set" checked> Exigir set para automático</label>
-    <label><input type="checkbox" name="require_rarity"> Exigir raridade para automático</label>
+    <label><input type="checkbox" name="recursive"> {{ t('scan.recursive') }}</label>
+    <label><input type="checkbox" name="auto" checked> {{ t('scan.auto') }}</label>
+    <label><input type="checkbox" name="reprocess"> {{ t('scan.reprocess') }}</label>
+    <label><input type="checkbox" name="grid"> {{ t('scan.grid') }}</label>
+  </div>
+  <div id="auto-only-options" class="grid">
+    <label><input type="checkbox" name="require_set" checked> {{ t('scan.require_set') }}</label>
+    <label><input type="checkbox" name="require_rarity"> {{ t('scan.require_rarity') }}</label>
   </div>
   <p class="kbd-hint">
-    Com "exigir set" marcado, uma leitura só entra sozinha na coleção quando o
-    set também foi identificado — sem isso, mesmo um nome de alta confiança
-    vira pendência para confirmar manualmente, preservando a foto de origem.
-    "Exigir raridade" é mais rígido: mesmo com o set 100% identificado, se
-    houver 2+ raridades catalogadas para ele (raridade ainda ambígua), a
-    leitura também vira pendência — desmarcado (padrão), o item já entra na
-    coleção com o set certo e a raridade pendente, resolvível depois em
-    "Coleção".
+    {{ t('scan.require_hint') }}
   </p>
-  <label>Layout da grade (opcional)
+  <label>{{ t('scan.grid_size_label') }}
     <input type="text" name="grid_size" id="grid-size-input" placeholder="ex.: 3x3">
   </label>
   <p class="kbd-hint">
-    Se souber o layout exato (linhas x colunas), informe aqui — mais confiável
-    que a detecção automática, que erra fácil com arte de carta de verdade.
-    Preencher já liga o modo grade sozinho.
+    {{ t('scan.grid_size_hint') }}
   </p>
-  <button type="submit">Iniciar scan</button>
+  <button type="submit">{{ t('scan.start_button') }}</button>
 </form>
 
 <hr>
 
-<h2>Ou envie fotos daqui</h2>
-<p class="kbd-hint">Até {{ max_upload_files }} arquivos, {{ max_upload_mb }} MB cada. JPG/PNG.</p>
+<h2>{{ t('scan.upload_heading') }}</h2>
+<p class="kbd-hint">{{ t('scan.upload_hint', max_files=max_upload_files, max_mb=max_upload_mb) }}</p>
 <div id="upload-drop" class="upload-drop">
-  Arraste fotos aqui, ou <label style="text-decoration: underline; cursor: pointer;">escolha arquivos
+  <span id="upload-drop-text">{{ t('scan.upload_drop_text') }}</span> <label style="text-decoration: underline; cursor: pointer;">{{ t('scan.upload_choose_files') }}
     <input type="file" id="file-input" multiple accept="image/jpeg,image/png" hidden>
   </label>
 </div>
+<p id="upload-status" class="kbd-hint"></p>
+<button type="button" id="upload-reset-button" class="outline" hidden>{{ t('scan.upload_reset_button') }}</button>
 
 <section id="capture-section" hidden>
   <hr>
-  <h2>Ou capture do scanner</h2>
+  <h2>{{ t('scan.capture_heading') }}</h2>
   <div class="grid">
-    <label>Dispositivo
+    <label>{{ t('scan.device_label') }}
       <select id="device-select"></select>
     </label>
-    <label>DPI
+    <label>{{ t('scan.dpi_label') }}
       <input type="number" id="capture-dpi" value="300" min="75" max="1200">
     </label>
   </div>
-  <label><input type="checkbox" id="capture-color" checked> Cor (desmarcado: tons de cinza)</label>
+  <label><input type="checkbox" id="capture-color" checked> {{ t('scan.color_label') }}</label>
+  <label><input type="checkbox" id="auto-scan-checkbox"> {{ t('scan.auto_scan_checkbox') }}</label>
   <p class="kbd-hint">
-    Uma página por clique — a mesa do scanner não tem alimentador automático,
-    então cada captura para e espera você trocar a folha antes da próxima.
+    {{ t('scan.capture_hint') }}
   </p>
-  <button type="button" id="capture-button" class="secondary">Capturar página</button>
-  <button type="button" id="capture-reset-button" class="outline" hidden>Começar nova captura</button>
+  <button type="button" id="capture-button" class="secondary">{{ t('scan.capture_button') }}</button>
+  <button type="button" id="capture-reset-button" class="outline" hidden>{{ t('scan.capture_reset_button') }}</button>
   <p id="capture-status" class="kbd-hint"></p>
 </section>
 
 <section id="progress-section" hidden>
-  <h2>Progresso</h2>
+  <h2>{{ t('scan.progress_heading') }}</h2>
+  <button type="button" id="cancel-scan-button" class="outline contrast" hidden>{{ t('scan.cancel_button') }}</button>
   <progress id="progress-bar" value="0" max="100"></progress>
   <p id="progress-counts"></p>
   <div id="scan-log" class="scan-log"></div>
@@ -90,6 +86,8 @@ const form = document.getElementById("scan-form");
 const folderInput = document.getElementById("folder-input");
 const dropZone = document.getElementById("upload-drop");
 const fileInput = document.getElementById("file-input");
+const uploadStatus = document.getElementById("upload-status");
+const uploadResetButton = document.getElementById("upload-reset-button");
 const captureSection = document.getElementById("capture-section");
 const deviceSelect = document.getElementById("device-select");
 const captureDpi = document.getElementById("capture-dpi");
@@ -102,28 +100,64 @@ const progressBar = document.getElementById("progress-bar");
 const progressCounts = document.getElementById("progress-counts");
 const scanLog = document.getElementById("scan-log");
 const errorBox = document.getElementById("form-error");
+const submitButton = form.querySelector('button[type="submit"]');
+const cancelButton = document.getElementById("cancel-scan-button");
+const gridSizeInput = document.getElementById("grid-size-input");
+const autoOnlyOptions = document.getElementById("auto-only-options");
+const autoScanCheckbox = document.getElementById("auto-scan-checkbox");
+let currentRunId = null;
 
 function showError(message, hint) {
   errorBox.innerHTML = `<div class="error-box"><strong>${message}</strong>${hint ? "<br><small>" + hint + "</small>" : ""}</div>`;
 }
 function clearError() { errorBox.innerHTML = ""; }
 
+// Preenchimento do layout já liga o modo grade sozinho (e apagar desliga de
+// volta) — não mexe no auto-check do fluxo de captura física (linha abaixo),
+// que é uma via de mão única separada (capturar sempre força grade ligada,
+// independente do que está escrito aqui).
+gridSizeInput.addEventListener("input", () => {
+  form.grid.checked = gridSizeInput.value.trim().length > 0;
+});
+
+function syncAutoOnlyOptions() {
+  autoOnlyOptions.hidden = !form.auto.checked;
+}
+form.auto.addEventListener("change", syncAutoOnlyOptions);
+syncAutoOnlyOptions();
+
+// Nunca escreve em `dropZone.textContent` — ele contém o `<label>`+`<input
+// id="file-input">` que permite escolher arquivos; sobrescrever apagaria
+// esses filhos do DOM e a pessoa perderia todo jeito de selecionar fotos de
+// novo depois do primeiro upload (achado real do usuário: "fico
+// impossibilitado de corrigir o erro caso tenha selecionado fotos
+// incorretas"). O status vive em `#upload-status`, um elemento separado.
 async function uploadFiles(fileList) {
   if (!fileList.length) return;
   const data = new FormData();
   for (const f of fileList) data.append("files", f);
-  dropZone.textContent = "Enviando...";
+  uploadStatus.textContent = t("scan.uploading");
   try {
     const res = await fetch("/api/v1/uploads", { method: "POST", body: data });
     const body = await res.json();
-    if (!res.ok) { showError(body.error || "Falha no envio", body.hint); return; }
+    if (!res.ok) { showError(body.error || t("scan.upload_failed"), body.hint); uploadStatus.textContent = ""; return; }
     folderInput.value = body.folder;
-    dropZone.textContent = `${body.saved} foto(s) recebida(s)` + (body.rejected.length ? `, ${body.rejected.length} rejeitada(s)` : "") + ". Pronto para escanear.";
+    uploadStatus.textContent = t("scan.upload_success", { saved: body.saved }) +
+      (body.rejected.length ? t("scan.upload_rejected", { rejected: body.rejected.length }) : "") +
+      t("scan.upload_ready_suffix");
+    uploadResetButton.hidden = false;
     clearError();
   } catch (err) {
-    dropZone.textContent = "Falha no envio.";
+    uploadStatus.textContent = t("scan.upload_failed");
   }
 }
+
+uploadResetButton.addEventListener("click", () => {
+  folderInput.value = "";
+  fileInput.value = "";
+  uploadStatus.textContent = "";
+  uploadResetButton.hidden = true;
+});
 
 dropZone.addEventListener("dragover", (e) => { e.preventDefault(); dropZone.classList.add("dragover"); });
 dropZone.addEventListener("dragleave", () => dropZone.classList.remove("dragover"));
@@ -151,8 +185,8 @@ async function loadCaptureDevices() {
       captureSection.hidden = false;
       deviceSelect.innerHTML = "";
       captureButton.disabled = true;
-      captureStatus.textContent = `Captura por scanner indisponível: ${body.error || "erro desconhecido"}` +
-        (body.hint ? ` — ${body.hint}` : "");
+      captureStatus.textContent = t("scan.capture_unavailable", { error: body.error || t("scan.unknown_error") }) +
+        (body.hint ? t("scan.capture_unavailable_hint_suffix", { hint: body.hint }) : "");
       return;
     }
     const devices = await res.json();
@@ -179,7 +213,7 @@ let capturedPages = 0;
 
 captureButton.addEventListener("click", async () => {
   captureButton.disabled = true;
-  captureStatus.textContent = "Capturando...";
+  captureStatus.textContent = t("scan.capturing");
   try {
     const res = await fetch("/api/v1/capture", {
       method: "POST",
@@ -192,7 +226,7 @@ captureButton.addEventListener("click", async () => {
       }),
     });
     const body = await res.json();
-    if (!res.ok) { showError(body.error || "Falha na captura", body.hint); captureStatus.textContent = ""; return; }
+    if (!res.ok) { showError(body.error || t("scan.capture_failed"), body.hint); captureStatus.textContent = ""; return; }
     captureFolder = body.folder;
     capturedPages++;
     folderInput.value = captureFolder;
@@ -200,21 +234,23 @@ captureButton.addEventListener("click", async () => {
     // mesmo default do comando `scan-device` na CLI (ADR 0011).
     form.grid.checked = true;
     captureResetButton.hidden = false;
-    captureStatus.textContent = `${capturedPages} página(s) capturada(s). Troque a folha e clique em ` +
-      `"Capturar página" de novo, ou inicie o scan quando terminar.`;
+    captureStatus.textContent = t("scan.capture_progress", { pages: capturedPages });
     clearError();
   } catch (err) {
-    captureStatus.textContent = "Falha na captura.";
+    captureStatus.textContent = t("scan.capture_failed");
   } finally {
     captureButton.disabled = false;
   }
 });
 
-captureResetButton.addEventListener("click", () => {
+captureResetButton.addEventListener("click", async () => {
+  if (autoScanCheckbox.checked && captureFolder) {
+    await runScan();
+  }
   captureFolder = null;
   capturedPages = 0;
   captureResetButton.hidden = true;
-  captureStatus.textContent = "Pronto para uma nova sequência de captura.";
+  captureStatus.textContent = t("scan.capture_reset_ready");
 });
 
 function logLine(text) {
@@ -224,9 +260,38 @@ function logLine(text) {
   scanLog.scrollTop = scanLog.scrollHeight;
 }
 
-form.addEventListener("submit", async (e) => {
-  e.preventDefault();
+// Reabilita o formulário e esconde o botão de cancelar — chamado de todo
+// caminho que encerra um scan (concluído, cancelado, erro ou conexão
+// perdida), para o botão "Iniciar scan" nunca ficar travado desabilitado.
+function finishScan() {
+  submitButton.disabled = false;
+  cancelButton.hidden = true;
+  currentRunId = null;
+}
+
+// Fica desabilitado até `finishScan()` esconder o botão (evento `cancelled`/
+// `done`/`scan-error`/conexão encerrada) — cancelamento é cooperativo
+// (checado só depois de cada imagem processada), então reabilitar assim que
+// o `fetch` do DELETE volta (como antes) deixava a pessoa clicar de novo
+// enquanto o scan ainda estava rodando de verdade no servidor. Só reabilita
+// aqui mesmo se o próprio pedido de cancelamento falhar (erro de rede).
+cancelButton.addEventListener("click", async () => {
+  if (!currentRunId) return;
+  cancelButton.disabled = true;
+  progressCounts.textContent = t("scan.cancelling");
+  try {
+    await fetch(`/api/v1/scans/live/${currentRunId}`, { method: "DELETE" });
+  } catch (err) {
+    cancelButton.disabled = false;
+  }
+});
+
+// Corpo do início de scan, extraído para função própria: tanto o submit
+// manual do formulário quanto "escanear automaticamente ao finalizar a
+// captura" (botão "Começar nova captura") precisam do mesmo fluxo.
+async function runScan() {
   clearError();
+  submitButton.disabled = true;
   const body = {
     folder: folderInput.value,
     provider: form.provider.value,
@@ -244,11 +309,17 @@ form.addEventListener("submit", async (e) => {
     body: JSON.stringify(body),
   });
   const payload = await res.json();
-  if (!res.ok) { showError(payload.error || "Não foi possível iniciar o scan", payload.hint); return; }
+  if (!res.ok) {
+    showError(payload.error || t("scan.start_failed"), payload.hint);
+    submitButton.disabled = false;
+    return;
+  }
 
+  currentRunId = payload.run_id;
+  cancelButton.hidden = false;
   progressSection.hidden = false;
   progressBar.removeAttribute("value");
-  progressCounts.textContent = "Iniciando...";
+  progressCounts.textContent = t("scan.starting");
   scanLog.innerHTML = "";
 
   const source = new EventSource(`/api/v1/scans/live/${payload.run_id}/events`);
@@ -259,7 +330,7 @@ form.addEventListener("submit", async (e) => {
     // Uma foto com grade (--grid) rende um evento por carta detectada, todos
     // com o mesmo `file` — o sufixo distingue as linhas no log.
     const label = data.crop_count > 1 ? `${data.file} [${data.crop_index + 1}/${data.crop_count}]` : data.file;
-    if (data.skipped) { skipped++; logLine(`${label}: já processada, pulada`); }
+    if (data.skipped) { skipped++; logLine(t("scan.image_skipped", { label })); }
     else {
       processed++;
       // Conta pela decisão do motor (igual à linha do log logo abaixo), não
@@ -272,34 +343,58 @@ form.addEventListener("submit", async (e) => {
       else pending++;
       logLine(`${label}: ${data.name || data.ocr_name || "?"} [${data.decision || data.status}]`);
     }
-    progressCounts.textContent = `processadas: ${processed} · auto: ${autoAdded} · pendentes: ${pending} · falhas: ${failed} · puladas: ${skipped}`;
+    progressCounts.textContent = t("scan.progress_counts", {
+      processed, auto: autoAdded, pending, failed, skipped,
+    });
   });
 
   source.addEventListener("done", (ev) => {
     const data = JSON.parse(ev.data);
     progressBar.value = 100; progressBar.max = 100;
-    progressCounts.textContent = `Concluído: ${data.processed} processadas, ${data.auto_added} auto, ${data.pending} pendentes, ${data.failed} falhas, ${data.skipped_empty || 0} células vazias ignoradas.`;
-    if (data.job_id) logLine(`Job #${data.job_id} salvo.`);
+    progressCounts.textContent = t("scan.done_summary", {
+      processed: data.processed, auto: data.auto_added, pending: data.pending,
+      failed: data.failed, skipped: data.skipped_empty || 0,
+    });
+    if (data.job_id) logLine(t("scan.job_saved", { job_id: data.job_id }));
     source.close();
+    finishScan();
   });
 
   source.addEventListener("cancelled", () => {
-    progressCounts.textContent = "Cancelado.";
+    // Sai do modo indeterminado (setado em `progressBar.removeAttribute("value")`
+    // no início do scan) — sem isto a barra continuava animando "carregando"
+    // para sempre, mesmo com o texto já dizendo "Cancelado" (achado real do
+    // usuário).
+    progressBar.value = 0; progressBar.max = 100;
+    progressCounts.textContent = t("scan.cancelled");
     source.close();
+    finishScan();
   });
 
   source.addEventListener("scan-error", (ev) => {
     const data = JSON.parse(ev.data);
-    showError(data.message || "Erro durante o scan");
+    progressBar.value = 0; progressBar.max = 100;
+    showError(data.message || t("scan.scan_error"));
     source.close();
+    finishScan();
   });
 
   // Este sim é o "error" nativo do EventSource: falha de conexão, não do scan.
+  // Só encerra o formulário quando a conexão realmente fechou — em
+  // `CONNECTING` o navegador ainda pode reconectar sozinho, e o scan
+  // continua rodando no servidor mesmo assim.
   source.addEventListener("error", () => {
     if (source.readyState === EventSource.CLOSED) {
-      progressCounts.textContent += " (conexão encerrada)";
+      progressBar.value = 0; progressBar.max = 100;
+      progressCounts.textContent += t("scan.connection_closed_suffix");
+      finishScan();
     }
   });
+}
+
+form.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  await runScan();
 });
 </script>
 {% endblock %}

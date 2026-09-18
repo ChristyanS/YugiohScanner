@@ -26,14 +26,23 @@ from ..deps import (
     ClientDep,
     CollectionServiceDep,
     DatabaseDep,
+    DeckServiceDep,
     ExportServiceDep,
     ImageCacheDep,
     ScanRunnerDep,
     ScanServiceDep,
     SessionDep,
     SettingsDep,
+    SettingsServiceDep,
 )
-from ..serializers import card_to_dict, item_to_dict, job_to_dict, result_to_dict, set_to_dict
+from ..serializers import (
+    card_to_dict,
+    deck_to_dict,
+    item_to_dict,
+    job_to_dict,
+    result_to_dict,
+    set_to_dict,
+)
 
 router = APIRouter()
 
@@ -56,6 +65,19 @@ def stats(collection: CollectionServiceDep, scans: ScanServiceDep) -> dict[str, 
     result = collection.stats().as_dict()
     result["pending_review"] = len(scans.pending_results(limit=10_000))
     return result
+
+
+# ---------------------------------------------------------------- preferências
+
+
+class UiLanguageBody(BaseModel):
+    language: str
+
+
+@router.post("/settings/ui-language")
+def set_ui_language(body: UiLanguageBody, settings: SettingsServiceDep) -> dict[str, Any]:
+    settings.set_ui_language(body.language)
+    return {"ui_language": settings.get_ui_language()}
 
 
 # ---------------------------------------------------------------------- sync
@@ -122,6 +144,17 @@ def list_sets(
     offset: int = 0,
 ) -> list[dict[str, Any]]:
     return [set_to_dict(s) for s in catalog.list_sets(limit=limit, offset=offset)]
+
+
+class SetCreateBody(BaseModel):
+    set_code: str
+    set_name: str
+
+
+@router.post("/sets")
+def create_set(body: SetCreateBody, catalog: CatalogServiceDep) -> dict[str, Any]:
+    card_set = catalog.register_set(body.set_code, body.set_name)
+    return set_to_dict(card_set)
 
 
 # --------------------------------------------------------------------- scans
@@ -391,6 +424,101 @@ def patch_collection_item(
 def delete_collection_item(item_id: int, collection: CollectionServiceDep) -> dict[str, bool]:
     collection.remove(item_id)
     return {"removed": True}
+
+
+# ------------------------------------------------------------- deck builder
+
+
+class DeckCreateBody(BaseModel):
+    name: str
+    build_mode: str = "full_db"
+    banlist: str = "TCG"
+
+
+class DeckPatchBody(BaseModel):
+    name: str | None = None
+    cover_card_id: int | None = None
+
+
+class DeckCardBody(BaseModel):
+    card_id: int
+    zone: str
+    quantity: int = Field(default=1, ge=1)
+
+
+@router.get("/decks")
+def list_decks(decks: DeckServiceDep) -> list[dict[str, Any]]:
+    return [deck_to_dict(d) for d in decks.list_decks()]
+
+
+@router.post("/decks")
+def create_deck(body: DeckCreateBody, decks: DeckServiceDep) -> dict[str, Any]:
+    deck = decks.create_deck(body.name, build_mode=body.build_mode, banlist=body.banlist)
+    return deck_to_dict(deck)
+
+
+@router.get("/decks/{deck_id}")
+def get_deck(deck_id: int, decks: DeckServiceDep) -> dict[str, Any]:
+    deck = decks.get_deck(deck_id)
+    return deck_to_dict(deck, cards=decks.repo.cards_for_deck(deck_id))
+
+
+@router.put("/decks/{deck_id}")
+def update_deck(deck_id: int, body: DeckPatchBody, decks: DeckServiceDep) -> dict[str, Any]:
+    deck = decks.get_deck(deck_id)
+    if body.name is not None:
+        deck = decks.rename_deck(deck_id, body.name)
+    # `model_fields_set` (não só "não é None") distingue "campo omitido" de
+    # "cliente mandou null de propósito para limpar a capa do deck".
+    if "cover_card_id" in body.model_fields_set:
+        deck = decks.set_cover(deck_id, body.cover_card_id)
+    return deck_to_dict(deck)
+
+
+@router.delete("/decks/{deck_id}")
+def delete_deck(deck_id: int, decks: DeckServiceDep) -> dict[str, bool]:
+    decks.delete_deck(deck_id)
+    return {"removed": True}
+
+
+@router.get("/decks/{deck_id}/search")
+def search_deck_pool(
+    deck_id: int, decks: DeckServiceDep, q: str | None = None, limit: int = Query(50, ge=1, le=200)
+) -> list[dict[str, Any]]:
+    deck = decks.get_deck(deck_id)
+    return [card_to_dict(c) for c in decks.searchable_pool(deck, q, limit=limit)]
+
+
+@router.post("/decks/{deck_id}/cards")
+def add_deck_card(deck_id: int, body: DeckCardBody, decks: DeckServiceDep) -> dict[str, Any]:
+    decks.add_card(deck_id, body.card_id, body.zone, quantity=body.quantity)
+    deck = decks.get_deck(deck_id)
+    return deck_to_dict(deck, cards=decks.repo.cards_for_deck(deck_id))
+
+
+@router.delete("/decks/{deck_id}/cards/{card_id}")
+def remove_deck_card(
+    deck_id: int,
+    card_id: int,
+    decks: DeckServiceDep,
+    zone: str,
+    quantity: int | None = None,
+) -> dict[str, Any]:
+    decks.remove_card(deck_id, card_id, zone, quantity=quantity)
+    deck = decks.get_deck(deck_id)
+    return deck_to_dict(deck, cards=decks.repo.cards_for_deck(deck_id))
+
+
+@router.get("/decks/{deck_id}/validate")
+def validate_deck(deck_id: int, decks: DeckServiceDep) -> dict[str, Any]:
+    result = decks.validate_deck(deck_id)
+    return {
+        "legal": result.legal,
+        "issues": result.issues,
+        "main_count": result.main_count,
+        "extra_count": result.extra_count,
+        "side_count": result.side_count,
+    }
 
 
 # --------------------------------------------------------------- exportação

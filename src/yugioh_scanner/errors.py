@@ -291,6 +291,68 @@ class PrintNotFoundForCardError(CollectionError):
         )
 
 
+class SetAlreadyExistsError(CollectionError):
+    """Já existe um set com este código — cadastro manual é create, não upsert.
+
+    Um typo de cadastro manual não pode sobrescrever silenciosamente um set
+    que já veio do sync (plano de revisão: cadastro manual de set).
+    """
+
+    def __init__(self, set_code: str) -> None:
+        super().__init__(
+            f"Já existe um set cadastrado com o código '{set_code}'.",
+            hint="Use o set já existente em vez de cadastrar de novo.",
+        )
+
+
+class InvalidSetDataError(CollectionError):
+    """Código ou nome de set ausente/vazio no cadastro manual."""
+
+
+# ------------------------------------------------------------- preferências
+
+
+class SettingsError(YugiohScannerError):
+    """Base dos erros de preferências do usuário (`app_setting`)."""
+
+
+class InvalidSettingValueError(SettingsError):
+    """Valor fora do vocabulário aceito para esta preferência."""
+
+    def __init__(self, key: str, value: str, allowed: tuple[str, ...]) -> None:
+        super().__init__(
+            f"Valor inválido para '{key}': '{value}'.",
+            hint=f"Valores aceitos: {', '.join(allowed)}",
+        )
+
+
+# -------------------------------------------------------------- deck builder
+
+
+class DeckError(YugiohScannerError):
+    """Base dos erros do Deck Builder."""
+
+
+class DeckNotFoundError(DeckError):
+    """Nenhum deck com o ID pedido."""
+
+    def __init__(self, deck_id: int) -> None:
+        super().__init__(f"Deck #{deck_id} não encontrado.")
+        self.deck_id = deck_id
+
+
+class DeckValidationError(DeckError):
+    """Uma adição/remoção violaria uma regra de construção de deck.
+
+    Bloqueante (levantado por `DeckService.add_card`) — diferente de
+    `DeckService.validate_deck`, que nunca levanta exceção e só reporta o
+    que está fora das regras (painel de legalidade do deck inteiro).
+    """
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+
+
 # -------------------------------------------------------------- exportação
 
 

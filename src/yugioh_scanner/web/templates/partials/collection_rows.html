@@ -1,6 +1,6 @@
 <table>
   <thead>
-    <tr><th></th><th>Carta</th><th>Set</th><th>Raridade</th><th>Qtd</th><th>Origem</th><th></th></tr>
+    <tr><th></th><th>{{ t('dashboard.table_card') }}</th><th>{{ t('dashboard.table_set') }}</th><th>{{ t('collection.table_rarity') }}</th><th>{{ t('dashboard.table_qty') }}</th><th>{{ t('dashboard.table_source') }}</th><th></th></tr>
   </thead>
   <tbody id="collection-rows">
     {% for item in items %}
@@ -8,7 +8,7 @@
     {% set lang = filters.lang if filters else "EN" %}
     {% include "partials/collection_row.html" %}
     {% else %}
-    <tr><td colspan="7"><em>Nenhum item bate com o filtro.</em></td></tr>
+    <tr><td colspan="7"><em>{{ t('common.no_items_match') }}</em></td></tr>
     {% endfor %}
   </tbody>
 </table>

@@ -15,7 +15,7 @@
             hx-target="this"
             hx-swap="innerHTML"
             style="cursor:pointer; text-decoration: underline;">
-        (definir set)
+        {{ t('collection.set_undefined_link') }}
       </span>
     {% endif %}
   </td>
@@ -29,16 +29,16 @@
             hx-target="this"
             hx-swap="innerHTML"
             style="cursor:pointer; text-decoration: underline;">
-        (definir raridade)
+        {{ t('collection.rarity_undefined_link') }}
       </span>
     {% endif %}
   </td>
   <td>
-    <button class="outline"
+    <button class="outline qty-btn"
             hx-post="/collection/{{ item.id }}/quantity?delta=-1&lang={{ lang }}"
             hx-target="#item-{{ item.id }}" hx-swap="outerHTML">-</button>
-    {{ item.quantity }}
-    <button class="outline"
+    <span class="qty-value">{{ item.quantity }}</span>
+    <button class="outline qty-btn"
             hx-post="/collection/{{ item.id }}/quantity?delta=1&lang={{ lang }}"
             hx-target="#item-{{ item.id }}" hx-swap="outerHTML">+</button>
   </td>
@@ -46,7 +46,7 @@
   <td>
     <button class="contrast outline"
             hx-delete="/collection/{{ item.id }}"
-            hx-confirm="Remover {{ display_name }} da coleção?"
-            hx-target="#item-{{ item.id }}" hx-swap="outerHTML">remover</button>
+            hx-confirm="{{ t('collection.confirm_remove', name=display_name) }}"
+            hx-target="#item-{{ item.id }}" hx-swap="outerHTML">{{ t('collection.remove_button') }}</button>
   </td>
 </tr>

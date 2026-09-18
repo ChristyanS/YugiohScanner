@@ -1,0 +1,183 @@
+{% extends "base.html" %}
+{% block title %}{{ t('deck_editor.default_title') }} — Yu-Gi-Oh! Scanner{% endblock %}
+{% block content %}
+<a href="/decks">{{ t('deck_editor.back_link') }}</a>
+<h1 id="deck-title">{{ t('deck_editor.default_title') }}</h1>
+
+<article id="form-error"></article>
+
+<div class="grid">
+  <label>{{ t('deck_editor.name_label') }}
+    <input type="text" id="deck-name-input">
+  </label>
+  <label>{{ t('deck_editor.mode_label') }}
+    <input type="text" id="deck-build-mode" disabled>
+  </label>
+  <label>{{ t('deck_editor.banlist_label') }}
+    <input type="text" id="deck-banlist" disabled>
+  </label>
+</div>
+<button type="button" id="save-name-button" class="secondary">{{ t('deck_editor.save_name_button') }}</button>
+
+<hr>
+
+<div id="legality-panel"></div>
+
+<hr>
+
+<div class="review-grid">
+  <div>
+    <h3>{{ t('deck_editor.search_heading') }}</h3>
+    <input type="search" id="deck-search-input" placeholder="{{ t('review.manual_search_placeholder') }}">
+    <ul id="deck-search-results" class="candidate-list"></ul>
+  </div>
+  <div>
+    <h3>{{ t('deck_editor.main_deck_heading') }} (<span id="main-count">0</span>)</h3>
+    <ul id="zone-main" class="candidate-list"></ul>
+    <h3>{{ t('deck_editor.extra_deck_heading') }} (<span id="extra-count">0</span>)</h3>
+    <ul id="zone-extra" class="candidate-list"></ul>
+    <h3>{{ t('deck_editor.side_deck_heading') }} (<span id="side-count">0</span>)</h3>
+    <ul id="zone-side" class="candidate-list"></ul>
+  </div>
+</div>
+
+<script>
+const deckId = {{ deck_id }};
+const errorBox = document.getElementById("form-error");
+const deckTitle = document.getElementById("deck-title");
+const deckNameInput = document.getElementById("deck-name-input");
+const deckBuildMode = document.getElementById("deck-build-mode");
+const deckBanlist = document.getElementById("deck-banlist");
+const saveNameButton = document.getElementById("save-name-button");
+const legalityPanel = document.getElementById("legality-panel");
+const searchInput = document.getElementById("deck-search-input");
+const searchResults = document.getElementById("deck-search-results");
+const zoneLists = {
+  main: document.getElementById("zone-main"),
+  extra: document.getElementById("zone-extra"),
+  side: document.getElementById("zone-side"),
+};
+const zoneCounts = {
+  main: document.getElementById("main-count"),
+  extra: document.getElementById("extra-count"),
+  side: document.getElementById("side-count"),
+};
+
+const BUILD_MODE_LABELS = {
+  collection_only: t("deck.build_mode.collection_only"),
+  full_db: t("deck.build_mode.full_db"),
+};
+
+function showError(message) {
+  errorBox.innerHTML = message ? `<div class="error-box">${message}</div>` : "";
+}
+
+async function loadDeck() {
+  const res = await fetch(`/api/v1/decks/${deckId}`);
+  if (!res.ok) { showError(t("deck_editor.not_found")); return; }
+  const deck = await res.json();
+  deckTitle.textContent = deck.name;
+  deckNameInput.value = deck.name;
+  deckBuildMode.value = BUILD_MODE_LABELS[deck.build_mode] || deck.build_mode;
+  deckBanlist.value = deck.banlist;
+
+  for (const zone of ["main", "extra", "side"]) {
+    zoneLists[zone].innerHTML = "";
+    zoneCounts[zone].textContent = "0";
+  }
+  let totals = { main: 0, extra: 0, side: 0 };
+  (deck.cards || []).forEach((c) => {
+    totals[c.zone] += c.quantity;
+    const li = document.createElement("li");
+    li.innerHTML = `<strong>${c.quantity}x</strong> ${c.card_name}
+      <button type="button" class="secondary" data-remove-one>-1</button>
+      <button type="button" class="contrast outline" data-remove-all>${t("collection.remove_button")}</button>`;
+    li.querySelector("[data-remove-one]").addEventListener("click", () => removeCard(c.card_id, c.zone, 1));
+    li.querySelector("[data-remove-all]").addEventListener("click", () => removeCard(c.card_id, c.zone, null));
+    zoneLists[c.zone].appendChild(li);
+  });
+  for (const zone of ["main", "extra", "side"]) {
+    zoneCounts[zone].textContent = String(totals[zone]);
+  }
+}
+
+async function loadLegality() {
+  const res = await fetch(`/api/v1/decks/${deckId}/validate`);
+  const result = await res.json();
+  const status = result.legal
+    ? `<mark>${t("deck_editor.deck_legal")}</mark>`
+    : `<strong>${t("deck_editor.deck_not_legal")}</strong><ul>${result.issues.map((i) => `<li>${i}</li>`).join("")}</ul>`;
+  legalityPanel.innerHTML = `<p>${t("deck_editor.legality_summary", {
+    main: result.main_count, extra: result.extra_count, side: result.side_count,
+  })}</p>${status}`;
+}
+
+async function refresh() {
+  await loadDeck();
+  await loadLegality();
+}
+
+saveNameButton.addEventListener("click", async () => {
+  const res = await fetch(`/api/v1/decks/${deckId}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name: deckNameInput.value }),
+  });
+  const payload = await res.json();
+  if (!res.ok) { showError(payload.error || t("deck_editor.save_name_failed")); return; }
+  showError("");
+  deckTitle.textContent = payload.name;
+});
+
+async function runSearch(query) {
+  const res = await fetch(`/api/v1/decks/${deckId}/search?q=${encodeURIComponent(query || "")}&limit=30`);
+  const cards = await res.json();
+  searchResults.innerHTML = "";
+  if (!cards.length) {
+    searchResults.innerHTML = `<li><em>${t("common.no_cards_found")}</em></li>`;
+    return;
+  }
+  cards.forEach((card) => {
+    const li = document.createElement("li");
+    li.innerHTML = `<img class="thumb" src="/api/v1/cards/${card.id}/image?size=small" loading="lazy" alt="">
+      <strong>${card.name}</strong>
+      <button type="button" data-zone="main">${t("deck_editor.add_zone_main")}</button>
+      <button type="button" data-zone="extra">${t("deck_editor.add_zone_extra")}</button>
+      <button type="button" data-zone="side">${t("deck_editor.add_zone_side")}</button>`;
+    li.querySelectorAll("button[data-zone]").forEach((btn) => {
+      btn.addEventListener("click", () => addCard(card.id, btn.dataset.zone));
+    });
+    searchResults.appendChild(li);
+  });
+}
+
+async function addCard(cardId, zone) {
+  showError("");
+  const res = await fetch(`/api/v1/decks/${deckId}/cards`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ card_id: cardId, zone, quantity: 1 }),
+  });
+  const payload = await res.json();
+  if (!res.ok) { showError(payload.error || t("deck_editor.add_card_failed")); return; }
+  await refresh();
+}
+
+async function removeCard(cardId, zone, quantity) {
+  showError("");
+  const qs = quantity ? `?zone=${zone}&quantity=${quantity}` : `?zone=${zone}`;
+  const res = await fetch(`/api/v1/decks/${deckId}/cards/${cardId}${qs}`, { method: "DELETE" });
+  if (!res.ok) { const payload = await res.json(); showError(payload.error || t("deck_editor.remove_card_failed")); return; }
+  await refresh();
+}
+
+let searchTimer = null;
+searchInput.addEventListener("input", () => {
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => runSearch(searchInput.value), 250);
+});
+
+runSearch("");
+refresh();
+</script>
+{% endblock %}

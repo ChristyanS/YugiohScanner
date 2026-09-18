@@ -98,6 +98,28 @@ class TestHandWrittenObjects:
     def test_fts_starts_empty(self, engine: Engine) -> None:
         assert fts_row_count(engine) == 0
 
+    def test_card_inserted_after_migration_is_searchable(self, engine: Engine) -> None:
+        """Regressão real: um `batch_alter_table("card", ...)` que precisa
+        recriar a tabela (ex.: para adicionar um `CHECK`, migração `0013`)
+        derruba os triggers `card_fts_*` junto — SQLite apaga triggers de uma
+        tabela quando ela é recriada, e o Alembic não sabe recriar DDL escrita
+        à mão. `test_fts_table_and_triggers_exist` confere que os triggers
+        **existem**; este teste confere que eles **funcionam de verdade**
+        depois de todas as migrações — uma carta inserida por último, não só
+        pelas linhas que a migração inicial já tinha."""
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO card (id, name, name_normalized, type, desc, has_effect, synced_at) "
+                    "VALUES (12345, 'Zzz Regression Card', 'zzz regression card', 'Spell Card', '', 0, "
+                    "'2026-01-01 00:00:00')"
+                )
+            )
+            rows = conn.execute(
+                text("SELECT rowid FROM card_fts WHERE card_fts MATCH 'regression*'")
+            ).scalars().all()
+        assert rows == [12345]
+
 
 class TestDowngrade:
     def test_full_downgrade_removes_everything(self, settings: Settings, engine: Engine) -> None:

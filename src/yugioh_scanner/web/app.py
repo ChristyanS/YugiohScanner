@@ -11,6 +11,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+import jinja2
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -20,14 +21,19 @@ from .. import __version__
 from ..config import Settings, get_settings
 from ..db.engine import engine_from_settings
 from ..db.session import Database
+from ..db.tables import DEFAULT_UI_LANGUAGE, UI_LANGUAGES
 from ..errors import (
     AmbiguousCardError,
     CaptureError,
+    DeckValidationError,
     InvalidScanPathError,
+    InvalidSetDataError,
+    InvalidSettingValueError,
     PrintNotFoundForCardError,
     ScannerUnavailableError,
     ScannerUnsupportedPlatformError,
     ScanResultAlreadyAppliedError,
+    SetAlreadyExistsError,
     UnknownExportProfileError,
     UploadError,
     YugiohScannerError,
@@ -35,7 +41,9 @@ from ..errors import (
 from ..images.cache import ImageCache
 from ..images.grid import InvalidGridSizeError
 from ..logging_setup import get_logger
+from ..services.settings_service import SettingsService
 from ..ygoprodeck.client import YgoProDeckClient
+from .i18n import catalog_json, translate
 from .scan_runner import ScanRunnerRegistry
 
 log = get_logger(__name__)
@@ -46,6 +54,41 @@ STATIC_DIR = _WEB_DIR / "static"
 
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 templates.env.globals["app_version"] = __version__
+
+
+@jinja2.pass_context
+def _t(context: jinja2.runtime.Context, key: str, **kwargs: object) -> str:
+    """Texto traduzido no idioma da request atual (plano de idioma global).
+
+    `request.state.ui_language` é preenchido pelo middleware
+    `_resolve_ui_language` abaixo, antes de qualquer rota renderizar
+    template — `Jinja2Templates` sempre injeta `request` no contexto.
+
+    `**kwargs` faz substituição simples de `{placeholder}` (mesmo algoritmo
+    do helper `t()` em JS, ver `base.html`) — o bastante para os poucos
+    textos parametrizados (contagens, nomes) sem precisar de uma lib de
+    i18n de verdade para só 2 idiomas.
+    """
+    request: Request = context["request"]
+    lang = getattr(request.state, "ui_language", DEFAULT_UI_LANGUAGE)
+    text = translate(lang, key)
+    for param_key, value in kwargs.items():
+        text = text.replace("{" + param_key + "}", str(value))
+    return text
+
+
+@jinja2.pass_context
+def _t_catalog_json(context: jinja2.runtime.Context) -> str:
+    """Catálogo completo do idioma atual, em JSON — consumido por
+    `window.I18N`/`t()` em `base.html` para strings dentro de `<script>`
+    inline, que o global `t()` do Jinja não alcança."""
+    request: Request = context["request"]
+    lang = getattr(request.state, "ui_language", DEFAULT_UI_LANGUAGE)
+    return catalog_json(lang)
+
+
+templates.env.globals["t"] = _t
+templates.env.globals["t_catalog_json"] = _t_catalog_json
 
 
 def _error_status(exc: YugiohScannerError) -> int:
@@ -61,7 +104,11 @@ def _error_status(exc: YugiohScannerError) -> int:
     if type(exc).__name__.endswith("NotFoundError"):
         return 404
     if isinstance(
-        exc, AmbiguousCardError | PrintNotFoundForCardError | ScanResultAlreadyAppliedError
+        exc,
+        AmbiguousCardError
+        | PrintNotFoundForCardError
+        | ScanResultAlreadyAppliedError
+        | SetAlreadyExistsError,
     ):
         return 409
     if isinstance(exc, ScannerUnsupportedPlatformError | ScannerUnavailableError):
@@ -81,7 +128,10 @@ def _error_status(exc: YugiohScannerError) -> int:
         | UnknownExportProfileError
         | UploadError
         | CaptureError
-        | InvalidGridSizeError,
+        | InvalidGridSizeError
+        | InvalidSetDataError
+        | InvalidSettingValueError
+        | DeckValidationError,
     ):
         return 422
     return 500
@@ -135,16 +185,43 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.templates = templates
     app.add_exception_handler(YugiohScannerError, _handle_domain_error)
 
+    @app.middleware("http")
+    async def _resolve_ui_language(request: Request, call_next):
+        """Resolve `request.state.ui_language` antes de qualquer rota rodar,
+        para `t()` (Jinja global acima) sempre ter um idioma disponível.
+
+        `?ui_lang=` sobrepõe a preferência salva (mesmo padrão de override de
+        `resolve_display_language`) sem persistir nada — só afeta esta
+        request. Pula `/static/`: não há texto para traduzir lá, e abrir uma
+        sessão de banco por asset seria desperdício. Qualquer falha (banco
+        ainda não migrado, etc.) cai no default em vez de derrubar a request
+        inteira — resolver o idioma da UI nunca pode ser o motivo de uma
+        página quebrar.
+        """
+        if request.url.path.startswith("/static/"):
+            return await call_next(request)
+        override = request.query_params.get("ui_lang")
+        if override in UI_LANGUAGES:
+            request.state.ui_language = override
+        else:
+            try:
+                with request.app.state.database.session() as session:
+                    request.state.ui_language = SettingsService(session).get_ui_language()
+            except Exception:
+                request.state.ui_language = DEFAULT_UI_LANGUAGE
+        return await call_next(request)
+
     if STATIC_DIR.exists():
         app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
-    from .routes import api, cards, collection, dashboard, review, scan
+    from .routes import api, cards, collection, dashboard, decks, review, scan
 
     app.include_router(dashboard.router)
     app.include_router(scan.router)
     app.include_router(review.router)
     app.include_router(collection.router)
     app.include_router(cards.router)
+    app.include_router(decks.router)
     app.include_router(api.router, prefix="/api/v1")
 
     return app

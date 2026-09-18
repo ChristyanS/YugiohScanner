@@ -140,6 +140,7 @@ class TestStats:
             "total_copies": 0,
             "items_without_print": 0,
             "sets_represented": 0,
+            "items_without_rarity": 0,
         }
 
 
@@ -159,6 +160,38 @@ class TestListItems:
         items = service.list_items(no_set=True)
         assert len(items) == 1
         assert items[0].card.name == "Blue-Eyes White Dragon"
+
+    def test_sorts_by_translated_name_when_lang_given(self, service: CollectionService) -> None:
+        """Achado real do usuário: trocar o idioma de exibição precisa
+        reordenar pela tradução, não só reacentuar o nome em inglês."""
+        from yugioh_scanner.db.tables import CardAltName
+
+        service.add_manual("Blue-Eyes White Dragon")  # "B..." em inglês
+        service.add_manual("Dark Magician")  # "D..." em inglês, sem tradução PT
+
+        # A fixture de sync já pode trazer uma tradução PT real para
+        # Blue-Eyes — força o texto para o caso de teste (propositalmente
+        # "Z..." em PT) em vez de assumir que a linha não existe ainda.
+        existing = (
+            service.session.query(CardAltName)
+            .filter_by(card_id=BLUE_EYES, language="PT")
+            .one_or_none()
+        )
+        if existing is None:
+            existing = CardAltName(card_id=BLUE_EYES, language="PT", name="", name_normalized="", desc="")
+            service.session.add(existing)
+        existing.name = "Zangado Dragão Branco"
+        existing.name_normalized = "zangado dragao branco"
+        service.session.flush()
+
+        en_order = [item.card.name for item in service.list_items(sort="name", lang="EN")]
+        pt_order = [item.card.name for item in service.list_items(sort="name", lang="PT")]
+
+        assert en_order == ["Blue-Eyes White Dragon", "Dark Magician"]
+        # "Dark Magician" (sem tradução, cai no fallback em inglês, "D...")
+        # agora vem antes de "Zangado Dragão Branco" ("Z...") — a tradução
+        # jogou Blue-Eyes para o final, o oposto da ordem em inglês.
+        assert pt_order == ["Dark Magician", "Blue-Eyes White Dragon"]
 
     def test_set_prefix_filters_by_set(self, service: CollectionService) -> None:
         service.add_manual("Blue-Eyes White Dragon", set_code="CT13-EN008")

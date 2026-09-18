@@ -1,19 +1,19 @@
 {% extends "base.html" %}
-{% block title %}Banco de Dados — Yu-Gi-Oh! Scanner{% endblock %}
+{% block title %}{{ t('database.title') }} — Yu-Gi-Oh! Scanner{% endblock %}
 {% block content %}
-<h1>Banco de Dados</h1>
-<p>Catálogo completo sincronizado do YGOPRODeck — não só o que você possui.</p>
+<h1>{{ t('database.title') }}</h1>
+<p>{{ t('database.intro') }}</p>
 
 <form id="db-filters" hx-get="/cards/rows" hx-target="#db-results" hx-push-url="true"
       hx-trigger="submit, keyup changed delay:300ms from:#db-search, change from:.db-filter">
   <div class="grid">
-    <input type="search" id="db-search" name="q" placeholder="Buscar por nome..." value="{{ filters.search or '' }}">
-    <input type="text" name="set" class="db-filter" placeholder="Set (ex.: LOB)" value="{{ filters.set_prefix or '' }}">
+    <input type="search" id="db-search" name="q" placeholder="{{ t('collection.search_placeholder') }}" value="{{ filters.search or '' }}">
+    <input type="text" name="set" class="db-filter" placeholder="{{ t('collection.set_placeholder') }}" value="{{ filters.set_prefix or '' }}">
     <select name="view" class="db-filter">
-      <option value="table" {% if filters.view == "table" %}selected{% endif %}>☰ Lista</option>
-      <option value="gallery" {% if filters.view == "gallery" %}selected{% endif %}>▦ Galeria</option>
+      <option value="table" {% if filters.view == "table" %}selected{% endif %}>{{ t('collection.view_list') }}</option>
+      <option value="gallery" {% if filters.view == "gallery" %}selected{% endif %}>{{ t('collection.view_gallery') }}</option>
     </select>
-    <select name="lang" class="db-filter" title="Idioma de exibição dos nomes">
+    <select name="lang" class="db-filter" title="{{ t('collection.display_language_title') }}">
       {% for code in languages %}
       <option value="{{ code }}" {% if filters.lang == code %}selected{% endif %}>{{ code }}</option>
       {% endfor %}

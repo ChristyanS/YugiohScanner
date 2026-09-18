@@ -110,3 +110,17 @@ def normalize_for_display(raw: str) -> str:
     tela de revisão) e destruir a caixa atrapalharia a leitura.
     """
     return _WHITESPACE.sub(" ", raw.translate(_TYPO_TABLE)).strip()
+
+
+def strip_accents_only(raw: str) -> str:
+    """Remove só os acentos, preservando pontuação e caixa (plano de idioma
+    global: colação PT_BR de ordenação alfabética).
+
+    Deliberadamente mais leve que `normalize_strict`: aquela também colapsa
+    hífen/apóstrofo para espaço, o que é certo para busca mas mudaria a
+    ordem relativa de nomes com pontuação de verdade (ex.: "Harpie's" vs
+    "Harpies") se fosse reaproveitada aqui.
+    """
+    text = raw.translate(_TYPO_TABLE)
+    text = unicodedata.normalize("NFKD", text)
+    return "".join(ch for ch in text if not unicodedata.combining(ch))

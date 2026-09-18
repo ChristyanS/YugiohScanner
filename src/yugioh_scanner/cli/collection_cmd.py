@@ -318,5 +318,6 @@ def stats_cmd(
                 "cópias totais": stats.total_copies,
                 "sem set identificado": stats.items_without_print,
                 "sets representados": stats.sets_represented,
+                "sem raridade definida": stats.items_without_rarity,
             },
         )

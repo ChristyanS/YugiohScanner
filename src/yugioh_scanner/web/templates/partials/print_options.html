@@ -1,6 +1,6 @@
 <div id="print-options-{{ item.id }}">
   <input type="search" name="q" value="{{ query }}"
-         placeholder="Buscar set (código, nome, raridade, região)..."
+         placeholder="{{ t('review.print_search_placeholder') }}"
          hx-get="/collection/{{ item.id }}/print-options"
          hx-trigger="keyup changed delay:300ms, search"
          hx-target="#print-options-{{ item.id }}" hx-swap="outerHTML">
@@ -8,8 +8,8 @@
           hx-target="#item-{{ item.id }}" hx-swap="outerHTML"
           name="card_print_id" hx-trigger="change">
     <option value="">
-      escolha um set...
-      {% if truncated %}(mostrando {{ prints|length }} de {{ total }} — refine a busca){% else %}({{ total }}){% endif %}
+      {{ t('print_options.choose_set_option') }}
+      {% if truncated %}{{ t('common.print_options_truncated', shown=prints|length, total=total) }}{% else %}({{ total }}){% endif %}
     </option>
     {% for p in prints %}
     <option value="{{ p.id }}">{{ p.set_code_full }} — {{ p.rarity or "?" }}{% if p.region %} [{{ p.region }}]{% endif %}</option>

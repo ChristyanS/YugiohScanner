@@ -46,12 +46,15 @@ class TestFiveScreens:
 
     def test_collection_page_renders(self, client: TestClient) -> None:
         client.post("/api/v1/collection", json={"name": "Dark Magician", "quantity": 2})
-        response = client.get("/collection")
+        # `lang=EN` explícito: o padrão agora segue o idioma global (pt-BR ->
+        # PT), e este teste quer só confirmar que a página renderiza com o
+        # item adicionado, não testar qual idioma é o padrão.
+        response = client.get("/collection", params={"lang": "EN"})
         assert response.status_code == 200
         assert "Dark Magician" in response.text
 
     def test_card_detail_page_renders(self, client: TestClient) -> None:
-        response = client.get(f"/cards/{BLUE_EYES}")
+        response = client.get(f"/cards/{BLUE_EYES}", params={"lang": "EN"})
         assert response.status_code == 200
         assert "Blue-Eyes White Dragon" in response.text
 
@@ -122,7 +125,7 @@ class TestCollectionInlineActions:
     def test_rows_partial_respects_filters(self, client: TestClient) -> None:
         client.post("/api/v1/collection", json={"name": "Dark Magician"})
         client.post("/api/v1/collection", json={"name": "Pot of Greed"})
-        response = client.get("/collection/rows", params={"search": "dark"})
+        response = client.get("/collection/rows", params={"search": "dark", "lang": "EN"})
         assert "Dark Magician" in response.text
         assert "Pot of Greed" not in response.text
 
@@ -140,7 +143,7 @@ class TestDatabaseScreen:
     ) -> None:
         # Nada foi adicionado à coleção — a tela de banco de dados mostra o
         # catálogo mesmo assim, ao contrário de `/collection`.
-        response = client.get("/cards")
+        response = client.get("/cards", params={"lang": "EN"})
         assert response.status_code == 200
         assert "Dark Magician" in response.text
         assert "Blue-Eyes White Dragon" in response.text
@@ -157,7 +160,7 @@ class TestDatabaseScreen:
         assert "/image?size=small" in response.text
 
     def test_search_filters_by_name(self, client: TestClient) -> None:
-        response = client.get("/cards", params={"q": "dragon"})
+        response = client.get("/cards", params={"q": "dragon", "lang": "EN"})
         assert "Blue-Eyes White Dragon" in response.text
         assert "Pot of Greed" not in response.text
 
@@ -180,15 +183,19 @@ class TestDatabaseScreen:
 
         monkeypatch.setattr(cards_module, "_PAGE_SIZE_TABLE", 2)
 
+        # As strings de navegação também aparecem como vocabulário no
+        # catálogo `window.I18N` embutido em toda página (ponte de tradução
+        # para JS) — checar o link renderizado (`>Anterior</a>`), não a
+        # palavra solta, para não dar falso positivo contra o catálogo.
         page1 = client.get("/cards", params={"page": 1})
         assert "página 1 de 3" in page1.text
-        assert "Próxima" in page1.text
-        assert "Anterior" not in page1.text
+        assert "Próxima &rarr;</a>" in page1.text
+        assert "Anterior</a>" not in page1.text
 
         page2 = client.get("/cards", params={"page": 2})
         assert "página 2 de 3" in page2.text
-        assert "Anterior" in page2.text
-        assert "Próxima" in page2.text
+        assert "Anterior</a>" in page2.text
+        assert "Próxima &rarr;</a>" in page2.text
 
 
 class TestMultilingualCatalog:
@@ -218,7 +225,11 @@ class TestMultilingualCatalog:
         assert response.status_code == 200
         assert "Mago Negro" in response.text
         assert "supremo mago" in response.text  # início da descrição em PT
-        assert "não disponível" not in response.text
+        # A frase completa interpolada ("PT" no lugar de "{lang}") só existe
+        # se o aviso de fato renderizou — a versão crua com "{lang}" (não
+        # substituído) sempre aparece no catálogo `window.I18N` embutido em
+        # toda página, então checar só "não disponível" daria falso positivo.
+        assert "Tradução para PT não disponível" not in response.text
 
     def test_detail_page_falls_back_to_english_when_translation_missing(
         self, client: TestClient
@@ -227,14 +238,20 @@ class TestMultilingualCatalog:
         response = client.get(f"/cards/{DARK_MAGICIAN}", params={"lang": "DE"})
         assert response.status_code == 200
         assert "Dark Magician" in response.text
-        assert "não disponível" in response.text
+        assert "Tradução para DE não disponível" in response.text
 
-    def test_detail_page_defaults_to_english_without_lang_param(
+    def test_detail_page_defaults_to_ui_language_without_lang_param(
         self, client: TestClient
     ) -> None:
-        response = client.get(f"/cards/{DARK_MAGICIAN}")
-        assert "Dark Magician" in response.text
-        assert "Mago Negro" not in response.text
+        # Sem `?lang=`, o padrão agora segue o idioma global da UI (plano de
+        # idioma global, fase 2) em vez de cair fixo em inglês.
+        pt_br_default = client.get(f"/cards/{DARK_MAGICIAN}")
+        assert "Mago Negro" in pt_br_default.text
+
+        client.post("/api/v1/settings/ui-language", json={"language": "en"})
+        en_default = client.get(f"/cards/{DARK_MAGICIAN}")
+        assert "Dark Magician" in en_default.text
+        assert "Mago Negro" not in en_default.text
 
     def test_unknown_lang_param_is_ignored(self, client: TestClient) -> None:
         response = client.get(f"/cards/{DARK_MAGICIAN}", params={"lang": "XX"})
@@ -252,16 +269,20 @@ class TestMultilingualCatalog:
         assert ">Mago Negro</a>" in response.text
         assert ">Dark Magician</a>" not in response.text
 
-    def test_database_listing_defaults_to_english(self, client: TestClient) -> None:
-        response = client.get("/cards")
-        assert "Dark Magician" in response.text
-        assert "Mago Negro" not in response.text
+    def test_database_listing_defaults_to_ui_language(self, client: TestClient) -> None:
+        pt_br_default = client.get("/cards")
+        assert ">Mago Negro</a>" in pt_br_default.text
+
+        client.post("/api/v1/settings/ui-language", json={"language": "en"})
+        en_default = client.get("/cards")
+        assert "Dark Magician" in en_default.text
+        assert "Mago Negro" not in en_default.text
 
 
 class TestCollectionGalleryView:
     def test_gallery_view_shows_quantity_and_image(self, client: TestClient) -> None:
         client.post("/api/v1/collection", json={"name": "Dark Magician", "quantity": 3})
-        response = client.get("/collection", params={"view": "gallery"})
+        response = client.get("/collection", params={"view": "gallery", "lang": "EN"})
         assert response.status_code == 200
         assert 'class="gallery-grid"' in response.text
         assert "x3" in response.text
@@ -270,7 +291,9 @@ class TestCollectionGalleryView:
     def test_gallery_rows_partial_respects_filters(self, client: TestClient) -> None:
         client.post("/api/v1/collection", json={"name": "Dark Magician"})
         client.post("/api/v1/collection", json={"name": "Pot of Greed"})
-        response = client.get("/collection/rows", params={"search": "dark", "view": "gallery"})
+        response = client.get(
+            "/collection/rows", params={"search": "dark", "view": "gallery", "lang": "EN"}
+        )
         assert "Dark Magician" in response.text
         assert "Pot of Greed" not in response.text
 
@@ -281,14 +304,19 @@ class TestCollectionMultilingual:
 
     def test_search_by_translated_name_finds_the_item(self, client: TestClient) -> None:
         client.post("/api/v1/collection", json={"name": "Dark Magician"})
-        response = client.get("/collection", params={"search": "Mago Negro"})
+        # `lang=EN` isola o que este teste quer verificar (busca em PT acha
+        # o item) do idioma de exibição padrão (que agora segue o idioma
+        # global, coberto em `test_listing_defaults_to_ui_language`).
+        response = client.get("/collection", params={"search": "Mago Negro", "lang": "EN"})
         assert response.status_code == 200
         assert "Dark Magician" in response.text
 
     def test_rows_partial_search_by_translated_name(self, client: TestClient) -> None:
         client.post("/api/v1/collection", json={"name": "Dark Magician"})
         client.post("/api/v1/collection", json={"name": "Pot of Greed"})
-        response = client.get("/collection/rows", params={"search": "Mago Negro"})
+        response = client.get(
+            "/collection/rows", params={"search": "Mago Negro", "lang": "EN"}
+        )
         assert "Dark Magician" in response.text
         assert "Pot of Greed" not in response.text
 
@@ -298,10 +326,15 @@ class TestCollectionMultilingual:
         assert response.status_code == 200
         assert ">Mago Negro</a>" in response.text
 
-    def test_listing_defaults_to_english(self, client: TestClient) -> None:
+    def test_listing_defaults_to_ui_language(self, client: TestClient) -> None:
         client.post("/api/v1/collection", json={"name": "Dark Magician"})
-        response = client.get("/collection")
-        assert ">Dark Magician</a>" in response.text
+
+        pt_br_default = client.get("/collection")
+        assert ">Mago Negro</a>" in pt_br_default.text
+
+        client.post("/api/v1/settings/ui-language", json={"language": "en"})
+        en_default = client.get("/collection")
+        assert ">Dark Magician</a>" in en_default.text
 
     def test_gallery_also_respects_the_chosen_language(self, client: TestClient) -> None:
         client.post("/api/v1/collection", json={"name": "Dark Magician"})

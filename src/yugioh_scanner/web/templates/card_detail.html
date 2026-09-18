@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block title %}{{ localized.name }} — Yu-Gi-Oh! Scanner{% endblock %}
 {% block content %}
-<a href="/collection">&larr; coleção</a>
+<a href="/collection">{{ t('card_detail.back_link') }}</a>
 
 <nav class="lang-switch">
   {% for code in languages %}
@@ -10,7 +10,7 @@
   {% endfor %}
 </nav>
 {% if not localized.is_translated and lang != "EN" %}
-<p><small><em>Tradução para {{ lang }} não disponível — mostrando em inglês.</em></small></p>
+<p><small><em>{{ t('card_detail.translation_unavailable', lang=lang) }}</em></small></p>
 {% endif %}
 
 <div class="grid">
@@ -19,18 +19,18 @@
   </div>
   <div>
     <h1>{{ localized.name }}</h1>
-    <p><strong>Tipo:</strong> {{ card.type }}{% if card.attribute %} &middot; <strong>Atributo:</strong> {{ card.attribute }}{% endif %}</p>
-    {% if card.atk is not none %}<p><strong>ATK/DEF:</strong> {{ card.atk }}/{{ card.def }}{% if card.level %} &middot; <strong>Nível:</strong> {{ card.level }}{% endif %}</p>{% endif %}
-    {% if card.archetype %}<p><strong>Arquétipo:</strong> {{ card.archetype }}</p>{% endif %}
+    <p><strong>{{ t('card_detail.type_label') }}</strong> {{ card.type }}{% if card.attribute %} &middot; <strong>{{ t('card_detail.attribute_label') }}</strong> {{ card.attribute }}{% endif %}</p>
+    {% if card.atk is not none %}<p><strong>{{ t('card_detail.atk_def_label') }}</strong> {{ card.atk }}/{{ card.def }}{% if card.level %} &middot; <strong>{{ t('card_detail.level_label') }}</strong> {{ card.level }}{% endif %}</p>{% endif %}
+    {% if card.archetype %}<p><strong>{{ t('card_detail.archetype_label') }}</strong> {{ card.archetype }}</p>{% endif %}
     <p>{{ localized.desc }}</p>
-    <p><strong>Você possui: {{ total_owned }} cópia(s)</strong></p>
+    <p><strong>{{ t('card_detail.owned_copies', count=total_owned) }}</strong></p>
   </div>
 </div>
 
-<h2>Prints conhecidos</h2>
+<h2>{{ t('card_detail.known_prints_heading') }}</h2>
 <figure>
 <table>
-  <thead><tr><th>Set</th><th>Nome do set</th><th>Raridade</th><th>Possui</th></tr></thead>
+  <thead><tr><th>{{ t('dashboard.table_set') }}</th><th>{{ t('card_detail.table_set_name') }}</th><th>{{ t('collection.table_rarity') }}</th><th>{{ t('card_detail.table_owned') }}</th></tr></thead>
   <tbody>
     {% for p in prints %}
     <tr>
@@ -45,14 +45,14 @@
 </figure>
 
 {% if owned %}
-<h2>Suas cópias</h2>
+<h2>{{ t('card_detail.your_copies_heading') }}</h2>
 <figure>
 <table>
-  <thead><tr><th>Set</th><th>Condição</th><th>Qtd</th><th>Origem</th></tr></thead>
+  <thead><tr><th>{{ t('dashboard.table_set') }}</th><th>{{ t('collection.condition_label') }}</th><th>{{ t('dashboard.table_qty') }}</th><th>{{ t('dashboard.table_source') }}</th></tr></thead>
   <tbody>
     {% for item in owned %}
     <tr>
-      <td>{{ item.card_print.set_code_full if item.card_print else "indefinido" }}</td>
+      <td>{{ item.card_print.set_code_full if item.card_print else t('card_detail.print_undefined') }}</td>
       <td>{{ item.condition }}</td>
       <td>{{ item.quantity }}</td>
       <td>{{ item.source }}</td>

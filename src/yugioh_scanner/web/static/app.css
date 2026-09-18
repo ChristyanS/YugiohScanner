@@ -52,6 +52,23 @@
   background: var(--pico-card-sectioning-background-color);
 }
 
+/* Pico.css deixa `<button>` como bloco de largura 100% por padrão — sem
+   isto, o "-", a quantidade e o "+" da linha de coleção quebravam em 3
+   linhas dentro da mesma célula em vez de ficarem lado a lado (achado real
+   do usuário). */
+.qty-btn {
+  display: inline-block;
+  width: auto;
+  padding: 0.15rem 0.6rem;
+  margin: 0 0.35rem;
+}
+
+.qty-value {
+  display: inline-block;
+  min-width: 1.5rem;
+  text-align: center;
+}
+
 .review-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -62,6 +79,21 @@
   max-width: 100%;
   border: 1px solid var(--pico-muted-border-color);
   margin-block-end: 0.5rem;
+}
+
+/* Teto de tamanho da foto na revisão: sem isto, fotos de celular em alta
+   resolução empurram o resultado do OCR (nome/código/Card ID) para fora da
+   tela, obrigando a rolar para ver os dois ao mesmo tempo (achado real do
+   usuário). `.photo-wrap` é o que de fato controla a largura visível
+   (`img.roi` já tem `display:block` dentro dele). */
+.review-grid .photo-wrap {
+  max-width: 260px;
+  max-height: 55vh;
+}
+
+.review-grid .photo-wrap img.roi {
+  max-height: 55vh;
+  width: auto;
 }
 
 /* Grade de cartas (plano §22, ADR 0011): mostra só o recorte em revisão,
@@ -186,10 +218,14 @@
 
 progress { width: 100%; }
 
+/* 6 colunas (pedido do usuário para Coleção e Base de Dados — a mesma
+   classe é usada pelos dois, `collection_gallery.html` e
+   `database_gallery.html`): imagem menor o suficiente para caberem 2+
+   fileiras na tela ao mesmo tempo, não só uma. */
 .gallery-grid {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 1.25rem;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 0.75rem;
   margin-block: 1rem;
 }
 
@@ -229,9 +265,9 @@ progress { width: 100%; }
 }
 
 .gallery-caption {
-  font-size: 0.8rem;
+  font-size: 0.7rem;
   margin-block-start: 0.35rem;
-  line-height: 1.25;
+  line-height: 1.2;
 }
 
 .pagination {

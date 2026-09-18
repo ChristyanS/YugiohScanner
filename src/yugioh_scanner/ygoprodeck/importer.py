@@ -125,6 +125,8 @@ def card_row(api_card: ApiCard, now: Any) -> dict[str, Any]:
         "konami_id": misc.konami_id if misc else None,
         "has_effect": bool(misc.has_effect) if misc and misc.has_effect is not None else False,
         "ygoprodeck_url": api_card.ygoprodeck_url,
+        "ban_tcg": api_card.banlist_info.ban_tcg if api_card.banlist_info else None,
+        "ban_ocg": api_card.banlist_info.ban_ocg if api_card.banlist_info else None,
         "synced_at": now,
     }
 

@@ -1,6 +1,6 @@
 <table>
   <thead>
-    <tr><th></th><th>Carta</th><th>Tipo</th><th>Atributo</th><th>Arquétipo</th></tr>
+    <tr><th></th><th>{{ t('dashboard.table_card') }}</th><th>{{ t('database.table_type') }}</th><th>{{ t('database.table_attribute') }}</th><th>{{ t('database.table_archetype') }}</th></tr>
   </thead>
   <tbody>
     {% for card in cards %}
@@ -12,7 +12,7 @@
       <td>{{ card.archetype or "" }}</td>
     </tr>
     {% else %}
-    <tr><td colspan="5"><em>Nenhuma carta encontrada.</em></td></tr>
+    <tr><td colspan="5"><em>{{ t('common.no_cards_found') }}</em></td></tr>
     {% endfor %}
   </tbody>
 </table>

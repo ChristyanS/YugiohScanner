@@ -85,6 +85,20 @@ class ApiMiscInfo(ApiModel):
         return _empty_to_none(value)
 
 
+class ApiBanlistInfo(ApiModel):
+    """Conteúdo de `banlist_info` — status na banlist TCG/OCG/Goat (Deck
+    Builder: `Forbidden`/`Limited`/`Semi-Limited`, ausente = sem restrição).
+
+    Confirmado ao vivo em `cardinfo.php?name=Pot%20of%20Greed` (2026-09-14):
+    o campo existe mesmo sem pedir nada especial na consulta. `ban_goat` é
+    capturado mas intencionalmente não usado (fora de escopo do Deck Builder).
+    """
+
+    ban_tcg: str | None = None
+    ban_ocg: str | None = None
+    ban_goat: str | None = None
+
+
 class ApiCard(ApiModel):
     """Uma carta de `cardinfo.php`."""
 
@@ -94,6 +108,7 @@ class ApiCard(ApiModel):
     frame_type: str | None = Field(default=None, alias="frameType")
     human_readable_type: str | None = Field(default=None, alias="humanReadableCardType")
     desc: str = ""
+    banlist_info: ApiBanlistInfo | None = None
 
     atk: int | None = None
     # `def` é palavra reservada em Python; o alias mantém o nome da API.

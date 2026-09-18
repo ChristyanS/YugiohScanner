@@ -20,6 +20,7 @@ from sqlalchemy import Engine, create_engine, event, text
 from sqlalchemy.pool import StaticPool
 
 from ..config import Settings
+from ..domain.normalization import strip_accents_only
 from ..errors import DatabaseCorruptedError
 
 #: Aplicados a toda conexão SQLite. Ordem importa: WAL antes de synchronous.
@@ -34,10 +35,36 @@ _CONNECTION_PRAGMAS: tuple[tuple[str, str], ...] = (
 )
 
 
+def _collate_en(a: str, b: str) -> int:
+    """Ordenação alfabética case-insensitive simples — o default para
+    qualquer idioma que ainda não tem colação dedicada (plano de idioma
+    global: só PT-BR ganhou tratamento de acento nesta primeira entrega)."""
+    ka, kb = (a.casefold(), a), (b.casefold(), b)
+    return -1 if ka < kb else (1 if ka > kb else 0)
+
+
+def _collate_pt_br(a: str, b: str) -> int:
+    """"Á" ordena perto de "A": remove acento (mantendo o resto da string)
+    antes de comparar, com a string original como desempate estável."""
+    ka = (strip_accents_only(a).casefold(), a)
+    kb = (strip_accents_only(b).casefold(), b)
+    return -1 if ka < kb else (1 if ka > kb else 0)
+
+
 def _apply_pragmas(dbapi_connection: Any, _record: Any) -> None:
-    """Listener de conexão: aplica os PRAGMAs a cada nova conexão."""
+    """Listener de conexão: aplica os PRAGMAs e registra as colações a cada
+    nova conexão.
+
+    As colações são registradas **sempre**, nunca condicionalmente: como o
+    pool reaproveita conexões entre requisições, registrar só a "colação
+    ativa no momento do connect" deixaria conexões antigas presas ao idioma
+    anterior se a preferência mudar em runtime. Registrando as duas sempre,
+    quem monta a query escolhe qual **usar** por consulta (`.collate(...)`).
+    """
     if not isinstance(dbapi_connection, sqlite3.Connection):
         return
+    dbapi_connection.create_collation("EN", _collate_en)
+    dbapi_connection.create_collation("PT_BR", _collate_pt_br)
     cursor = dbapi_connection.cursor()
     try:
         for pragma, value in _CONNECTION_PRAGMAS:

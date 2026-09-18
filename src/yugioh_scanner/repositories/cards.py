@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 
 from ..db.fts import search_alt_card_ids, search_card_ids
@@ -76,13 +76,29 @@ class CardRepository:
         IT/PT para quem pesquisa pelo nome que está impresso na carta física.
         Nunca duplica: uma carta que bate nos dois só aparece uma vez, na
         posição do primeiro casamento.
-        """
-        primary = search_card_ids(self.session, query, limit=limit)
-        if len(primary) >= limit:
-            return primary
 
-        seen = set(primary)
-        merged = list(primary)
+        Antes de tudo, se `query` for só dígitos, tenta casar direto por
+        `Card.id` — que é o passcode (`db/tables.py:98`), não um id
+        arbitrário — para permitir buscar pelo "Card ID" impresso na carta
+        além do nome (tela de Revisão).
+        """
+        seen: set[int] = set()
+        merged: list[int] = []
+        stripped = query.strip()
+        if stripped.isdigit():
+            passcode = int(stripped)
+            if self.session.get(Card, passcode) is not None:
+                seen.add(passcode)
+                merged.append(passcode)
+
+        primary = search_card_ids(self.session, query, limit=limit)
+        for card_id in primary:
+            if card_id not in seen:
+                seen.add(card_id)
+                merged.append(card_id)
+        if len(merged) >= limit:
+            return merged[:limit]
+
         for card_id in search_alt_card_ids(self.session, query, limit=limit):
             if card_id not in seen:
                 seen.add(card_id)
@@ -96,13 +112,22 @@ class CardRepository:
         set_prefix: str | None = None,
         limit: int = 50,
         offset: int = 0,
+        locale: str = "EN",
+        lang: str = "EN",
     ) -> list[Card]:
         """Busca por nome (FTS5, plano §7.3, multilíngue desde a Fase 3 do
         faseamento web) opcionalmente filtrada por set.
 
         Sem `query`: lista o catálogo em ordem alfabética — é o estado inicial
         da tela `/collection`'s' equivalente de catálogo e do `/api/v1/cards`
-        sem `q` (navegação/paginação pura).
+        sem `q` (navegação/paginação pura). Com `lang != "EN"`, ordena pelo
+        nome **traduzido** (plano de idioma global, fase 2) — não só troca a
+        colação de acento sobre o nome em inglês, troca o próprio texto usado
+        como chave de ordenação, com fallback para o nome em inglês quando a
+        carta não tem tradução naquele idioma (mesmo fallback de
+        `CatalogService.display_names()`, então texto exibido e ordenação
+        continuam consistentes). Busca com `query` continua ordenada por
+        relevância FTS, não alfabética — `lang` não afeta esse ramo.
         """
         if query and query.strip():
             # Um pouco mais que `limit` para sobrar candidato depois do
@@ -117,7 +142,12 @@ class CardRepository:
             ordered = [found[card_id] for card_id in ids if card_id in found]
             return ordered[offset : offset + limit]
 
-        stmt = select(Card).order_by(Card.name)
+        sort_col = func.coalesce(CardAltName.name, Card.name) if lang != "EN" else Card.name
+        stmt = select(Card).order_by(sort_col.collate(locale))
+        if lang != "EN":
+            stmt = stmt.outerjoin(
+                CardAltName, and_(CardAltName.card_id == Card.id, CardAltName.language == lang)
+            )
         if set_prefix:
             stmt = stmt.join(CardPrint).where(CardPrint.set_prefix == set_prefix.upper())
         stmt = stmt.distinct().offset(offset).limit(limit)

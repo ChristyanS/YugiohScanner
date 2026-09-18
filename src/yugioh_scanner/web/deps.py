@@ -20,8 +20,10 @@ from ..db.session import Database
 from ..images.cache import ImageCache
 from ..services.catalog_service import CatalogService
 from ..services.collection_service import CollectionService
+from ..services.deck_service import DeckService
 from ..services.export_service import ExportService
 from ..services.scan_service import ScanService
+from ..services.settings_service import SettingsService
 from ..ygoprodeck.client import YgoProDeckClient
 from .scan_runner import ScanRunnerRegistry
 
@@ -77,7 +79,17 @@ def get_catalog_service(session: SessionDep) -> CatalogService:
     return CatalogService(session)
 
 
+def get_settings_service(session: SessionDep) -> SettingsService:
+    return SettingsService(session)
+
+
+def get_deck_service(session: SessionDep) -> DeckService:
+    return DeckService(session)
+
+
 CollectionServiceDep = Annotated[CollectionService, Depends(get_collection_service)]
 ExportServiceDep = Annotated[ExportService, Depends(get_export_service)]
 ScanServiceDep = Annotated[ScanService, Depends(get_scan_service)]
 CatalogServiceDep = Annotated[CatalogService, Depends(get_catalog_service)]
+SettingsServiceDep = Annotated[SettingsService, Depends(get_settings_service)]
+DeckServiceDep = Annotated[DeckService, Depends(get_deck_service)]

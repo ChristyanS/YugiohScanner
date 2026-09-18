@@ -123,6 +123,12 @@ class Card(Base):
     konami_id: Mapped[int | None] = mapped_column(Integer)
     has_effect: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     ygoprodeck_url: Mapped[str | None] = mapped_column(String(512))
+    #: Status na banlist TCG/OCG (`banlist_info.ban_tcg`/`.ban_ocg` da API —
+    #: `Forbidden`/`Limited`/`Semi-Limited`, NULL = sem restrição). Usado
+    #: pelo Deck Builder para o limite de cópias por carta. NULL em cartas
+    #: sincronizadas antes desta coluna existir, até o próximo `sync`.
+    ban_tcg: Mapped[str | None] = mapped_column(String(16))
+    ban_ocg: Mapped[str | None] = mapped_column(String(16))
 
     synced_at: Mapped[dt.datetime] = mapped_column(DateTime, nullable=False, default=utcnow)
 
@@ -139,6 +145,14 @@ class Card(Base):
     __table_args__ = (
         Index("ix_card_name_normalized", "name_normalized"),
         Index("ix_card_archetype", "archetype"),
+        CheckConstraint(
+            "ban_tcg IS NULL OR ban_tcg IN ('Forbidden', 'Limited', 'Semi-Limited')",
+            name="ck_card_ban_tcg",
+        ),
+        CheckConstraint(
+            "ban_ocg IS NULL OR ban_ocg IN ('Forbidden', 'Limited', 'Semi-Limited')",
+            name="ck_card_ban_ocg",
+        ),
     )
 
     def __repr__(self) -> str:
@@ -458,6 +472,88 @@ class CollectionItem(Base):
         return f"<CollectionItem card={self.card_id} print={self.card_print_id} x{self.quantity}>"
 
 
+# ------------------------------------------------------------------- decks
+
+DECK_BUILD_MODES = ("collection_only", "full_db")
+DECK_BANLISTS = ("TCG", "OCG")
+DECK_ZONES = ("main", "extra", "side")
+DEFAULT_DECK_BUILD_MODE = "full_db"
+DEFAULT_DECK_BANLIST = "TCG"
+
+
+class Deck(Base):
+    """Um deck montado pelo usuário (Deck Builder)."""
+
+    __tablename__ = "deck"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    #: Carta usada como capa/imagem do deck — sem FK obrigatória: um deck
+    #: pode existir sem carta escolhida ainda, e a carta pode ser removida
+    #: do deck sem invalidar a capa (`SET NULL`, não erro).
+    cover_card_id: Mapped[int | None] = mapped_column(
+        ForeignKey("card.id", ondelete="SET NULL")
+    )
+    #: Pool de cartas elegíveis: só as da coleção do usuário, ou o catálogo
+    #: inteiro. Só `collection_only` trava cópias pela quantidade possuída.
+    build_mode: Mapped[str] = mapped_column(
+        String(16), nullable=False, default=DEFAULT_DECK_BUILD_MODE
+    )
+    #: Banlist usada para o limite de cópias por carta (`Card.ban_tcg`/`.ban_ocg`).
+    banlist: Mapped[str] = mapped_column(
+        String(8), nullable=False, default=DEFAULT_DECK_BANLIST
+    )
+
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime, nullable=False, default=utcnow)
+    updated_at: Mapped[dt.datetime] = mapped_column(
+        DateTime, nullable=False, default=utcnow, onupdate=utcnow
+    )
+
+    cards: Mapped[list[DeckCard]] = relationship(
+        back_populates="deck", cascade="all, delete-orphan"
+    )
+
+    __table_args__ = (
+        _check_in("build_mode", DECK_BUILD_MODES, "ck_deck_build_mode"),
+        _check_in("banlist", DECK_BANLISTS, "ck_deck_banlist"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<Deck {self.id} {self.name!r} {self.build_mode}/{self.banlist}>"
+
+
+class DeckCard(Base):
+    """Uma carta dentro de um deck, numa zona (main/extra/side).
+
+    Chave única é `(deck_id, card_id, zone)`, não `(deck_id, card_id)`: uma
+    carta pode legitimamente estar dividida entre main e side ao mesmo tempo
+    (ex.: 2 cópias no main + 1 no side) — as regras de TCG/OCG contam o
+    limite de cópias por nome **somando todas as zonas**, não travam por
+    zona isolada (ver `DeckService.add_card`).
+    """
+
+    __tablename__ = "deck_card"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    deck_id: Mapped[int] = mapped_column(ForeignKey("deck.id", ondelete="CASCADE"), nullable=False)
+    card_id: Mapped[int] = mapped_column(ForeignKey("card.id", ondelete="CASCADE"), nullable=False)
+    zone: Mapped[str] = mapped_column(String(8), nullable=False)
+    quantity: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+
+    deck: Mapped[Deck] = relationship(back_populates="cards")
+    card: Mapped[Card] = relationship()
+
+    __table_args__ = (
+        Index("ux_deck_card", "deck_id", "card_id", "zone", unique=True),
+        Index("ix_deck_card_deck", "deck_id"),
+        CheckConstraint("quantity > 0", name="ck_deck_card_quantity_positive"),
+        _check_in("zone", DECK_ZONES, "ck_deck_card_zone"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<DeckCard deck={self.deck_id} card={self.card_id} {self.zone} x{self.quantity}>"
+
+
 # --------------------------------------------------------------------- scans
 
 
@@ -672,6 +768,36 @@ class SyncState(Base):
 
     def __repr__(self) -> str:
         return f"<SyncState {self.key}={self.value!r}>"
+
+
+class AppSetting(Base):
+    """Chave-valor com preferências do usuário (plano de idioma global).
+
+    Estrutura idêntica a `SyncState`, mas semântica diferente e por isso
+    tabela separada: aqui é preferência editável pelo usuário, não
+    bookkeeping de sincronização.
+    """
+
+    __tablename__ = "app_setting"
+
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    value: Mapped[str | None] = mapped_column(Text)
+    updated_at: Mapped[dt.datetime] = mapped_column(
+        DateTime, nullable=False, default=utcnow, onupdate=utcnow
+    )
+
+    def __repr__(self) -> str:
+        return f"<AppSetting {self.key}={self.value!r}>"
+
+
+#: Chaves conhecidas de `app_setting`.
+APP_SETTING_UI_LANGUAGE = "ui_language"
+APP_SETTING_DEFAULT_CARD_LANGUAGE = "default_card_language"
+
+#: Idiomas da interface (textos/labels) — deliberadamente só 2, diferente de
+#: `ALT_NAME_LANGUAGES`/`DISPLAY_LANGUAGES` (conteúdo de carta, 7 idiomas).
+UI_LANGUAGES = ("pt-BR", "en")
+DEFAULT_UI_LANGUAGE = "pt-BR"
 
 
 #: Chaves conhecidas de `sync_state`.

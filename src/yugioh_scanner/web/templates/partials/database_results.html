@@ -1,6 +1,6 @@
 <p>
-  {{ total }} carta{{ "s" if total != 1 else "" }} encontrada{{ "s" if total != 1 else "" }}
-  &mdash; página {{ filters.page }} de {{ total_pages }}
+  {{ t('database.count_singular', total=total) if total == 1 else t('database.count_plural', total=total) }}
+  &mdash; {{ t('common.page_of', page=filters.page, total_pages=total_pages) }}
 </p>
 
 {% if filters.view == "gallery" %}
@@ -13,13 +13,13 @@
   <span>
     {% if filters.page > 1 %}
     <a href="#" hx-get="/cards/rows?q={{ (filters.search or '') | urlencode }}&set={{ (filters.set_prefix or '') | urlencode }}&view={{ filters.view }}&lang={{ filters.lang }}&page={{ filters.page - 1 }}"
-       hx-target="#db-results" hx-push-url="true">&larr; Anterior</a>
+       hx-target="#db-results" hx-push-url="true">&larr; {{ t('database.previous') }}</a>
     {% endif %}
   </span>
   <span>
     {% if filters.page < total_pages %}
     <a href="#" hx-get="/cards/rows?q={{ (filters.search or '') | urlencode }}&set={{ (filters.set_prefix or '') | urlencode }}&view={{ filters.view }}&lang={{ filters.lang }}&page={{ filters.page + 1 }}"
-       hx-target="#db-results" hx-push-url="true">Próxima &rarr;</a>
+       hx-target="#db-results" hx-push-url="true">{{ t('database.next') }} &rarr;</a>
     {% endif %}
   </span>
 </nav>

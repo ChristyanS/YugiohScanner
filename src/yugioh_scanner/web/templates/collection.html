@@ -1,28 +1,28 @@
 {% extends "base.html" %}
-{% block title %}Coleção — Yu-Gi-Oh! Scanner{% endblock %}
+{% block title %}{{ t('collection.title') }} — Yu-Gi-Oh! Scanner{% endblock %}
 {% block content %}
-<h1>Coleção</h1>
+<h1>{{ t('collection.title') }}</h1>
 
 <form id="filters" hx-get="/collection/rows" hx-target="#results" hx-trigger="submit, keyup changed delay:300ms from:#search, change from:.filter">
   <div class="grid">
-    <input type="search" id="search" name="search" placeholder="Buscar por nome..." value="{{ filters.search or '' }}">
-    <input type="text" name="set" class="filter" placeholder="Set (ex.: LOB)" value="{{ filters.set_prefix or '' }}">
-    <label><input type="checkbox" name="no_set" class="filter" value="1" {% if filters.no_set %}checked{% endif %}> Só sem set</label>
-    <label><input type="checkbox" name="no_rarity" class="filter" value="1" {% if filters.no_rarity %}checked{% endif %}> Só sem raridade</label>
+    <input type="search" id="search" name="search" placeholder="{{ t('collection.search_placeholder') }}" value="{{ filters.search or '' }}">
+    <input type="text" name="set" class="filter" placeholder="{{ t('collection.set_placeholder') }}" value="{{ filters.set_prefix or '' }}">
+    <label><input type="checkbox" name="no_set" class="filter" value="1" {% if filters.no_set %}checked{% endif %}> {{ t('collection.only_no_set') }}</label>
+    <label><input type="checkbox" name="no_rarity" class="filter" value="1" {% if filters.no_rarity %}checked{% endif %}> {{ t('collection.only_no_rarity') }}</label>
   </div>
   <div class="grid">
     <select name="sort" class="filter">
-      <option value="name" {% if filters.sort == "name" %}selected{% endif %}>Nome</option>
-      <option value="quantity" {% if filters.sort == "quantity" %}selected{% endif %}>Quantidade</option>
-      <option value="added" {% if filters.sort == "added" %}selected{% endif %}>Adicionado em</option>
-      <option value="set" {% if filters.sort == "set" %}selected{% endif %}>Set</option>
+      <option value="name" {% if filters.sort == "name" %}selected{% endif %}>{{ t('collection.sort_name') }}</option>
+      <option value="quantity" {% if filters.sort == "quantity" %}selected{% endif %}>{{ t('collection.sort_quantity') }}</option>
+      <option value="added" {% if filters.sort == "added" %}selected{% endif %}>{{ t('collection.sort_added') }}</option>
+      <option value="set" {% if filters.sort == "set" %}selected{% endif %}>{{ t('collection.sort_set') }}</option>
     </select>
-    <label><input type="checkbox" name="desc" class="filter" value="1" {% if filters.descending %}checked{% endif %}> Decrescente</label>
+    <label><input type="checkbox" name="desc" class="filter" value="1" {% if filters.descending %}checked{% endif %}> {{ t('collection.descending') }}</label>
     <select name="view" class="filter">
-      <option value="table" {% if filters.view == "table" %}selected{% endif %}>☰ Lista</option>
-      <option value="gallery" {% if filters.view == "gallery" %}selected{% endif %}>▦ Galeria</option>
+      <option value="table" {% if filters.view == "table" %}selected{% endif %}>{{ t('collection.view_list') }}</option>
+      <option value="gallery" {% if filters.view == "gallery" %}selected{% endif %}>{{ t('collection.view_gallery') }}</option>
     </select>
-    <select name="lang" class="filter" title="Idioma de exibição dos nomes">
+    <select name="lang" class="filter" title="{{ t('collection.display_language_title') }}">
       {% for code in languages %}
       <option value="{{ code }}" {% if filters.lang == code %}selected{% endif %}>{{ code }}</option>
       {% endfor %}
@@ -31,47 +31,47 @@
 </form>
 
 <details id="manual-add">
-  <summary>Adicionar carta manualmente</summary>
-  <p class="kbd-hint">Sem escanear: busque pelo nome (em qualquer idioma sincronizado), escolha o print e a quantidade.</p>
-  <input type="search" id="add-search-input" placeholder="Nome da carta...">
+  <summary>{{ t('collection.manual_add_summary') }}</summary>
+  <p class="kbd-hint">{{ t('collection.manual_add_hint') }}</p>
+  <input type="search" id="add-search-input" placeholder="{{ t('review.manual_search_placeholder') }}">
   <ul id="add-search-results" class="candidate-list"></ul>
 
   <div id="add-selected" hidden>
-    <p><strong>Selecionada:</strong> <span id="add-selected-name"></span></p>
+    <p><strong>{{ t('collection.selected_label') }}</strong> <span id="add-selected-name"></span></p>
     <div class="grid">
-      <label>Set
+      <label>{{ t('review.set_label') }}
         <select id="add-print-select">
-          <option value="">(set indefinido)</option>
+          <option value="">{{ t('common.print_undefined_option') }}</option>
         </select>
       </label>
-      <label>Quantidade
+      <label>{{ t('review.quantity_label') }}
         <input type="number" id="add-quantity" value="1" min="1">
       </label>
     </div>
     <div class="grid">
-      <label>Condição
+      <label>{{ t('collection.condition_label') }}
         <select id="add-condition">
           {% for c in conditions %}<option value="{{ c }}">{{ c }}</option>{% endfor %}
         </select>
       </label>
-      <label>Edição
+      <label>{{ t('collection.edition_label') }}
         <select id="add-edition">
           {% for e in editions %}<option value="{{ e }}">{{ e }}</option>{% endfor %}
         </select>
       </label>
-      <label>Idioma da carta física
+      <label>{{ t('common.physical_language_label') }}
         <select id="add-language">
           {% for code in languages %}<option value="{{ code }}">{{ code }}</option>{% endfor %}
         </select>
       </label>
     </div>
     <div id="add-error"></div>
-    <button id="add-submit" type="button">Adicionar à coleção</button>
+    <button id="add-submit" type="button">{{ t('collection.add_button') }}</button>
   </div>
 </details>
 
 <details>
-  <summary>Exportar</summary>
+  <summary>{{ t('collection.export_summary') }}</summary>
   <form action="/api/v1/export" method="get">
     <div class="grid">
       <select name="profile">
@@ -80,7 +80,7 @@
         {% endfor %}
       </select>
       <input type="hidden" name="format" value="csv">
-      <button type="submit">Baixar CSV</button>
+      <button type="submit">{{ t('collection.download_csv') }}</button>
     </div>
   </form>
 </details>
@@ -123,7 +123,7 @@
     const cards = await res.json();
     resultsList.innerHTML = "";
     if (!cards.length) {
-      resultsList.innerHTML = "<li><em>Nenhuma carta encontrada.</em></li>";
+      resultsList.innerHTML = `<li><em>${t("common.no_cards_found")}</em></li>`;
       return;
     }
     cards.forEach((card) => {
@@ -144,7 +144,7 @@
 
     const res = await fetch(`/api/v1/cards/${card.id}`);
     const full = await res.json();
-    printSelect.innerHTML = '<option value="">(set indefinido)</option>' +
+    printSelect.innerHTML = `<option value="">${t("common.print_undefined_option")}</option>` +
       full.prints.map((p) => `<option value="${p.id}">${p.set_code} — ${p.rarity || "?"}</option>`).join("");
     selectedBox.hidden = false;
   }
@@ -156,7 +156,7 @@
   });
 
   submitButton.addEventListener("click", async () => {
-    if (!selectedCard) { showError("Escolha uma carta na busca acima."); return; }
+    if (!selectedCard) { showError(t("collection.choose_card_first")); return; }
     const quantity = parseInt(quantityInput.value, 10) || 1;
     const body = {
       name: selectedCard.name,
@@ -173,7 +173,7 @@
       body: JSON.stringify(body),
     });
     const payload = await res.json();
-    if (!res.ok) { showError(payload.error || "Falha ao adicionar", payload.hint); return; }
+    if (!res.ok) { showError(payload.error || t("collection.add_failed"), payload.hint); return; }
 
     // Reseta o formulário e recarrega a listagem com os filtros atuais
     // (mesmo formulário de busca/idioma/visualização já em tela).

@@ -5,7 +5,16 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..db.tables import Card, CardPrint, CardSet, CollectionItem, ScanJob, ScanResult
+from ..db.tables import (
+    Card,
+    CardPrint,
+    CardSet,
+    CollectionItem,
+    Deck,
+    DeckCard,
+    ScanJob,
+    ScanResult,
+)
 from ..domain.passcode import clean_passcode
 
 
@@ -121,6 +130,12 @@ def card_to_dict(card: Card, *, with_prints: bool = False) -> dict[str, Any]:
         "def": card.defense,
         "level": card.level,
         "desc": card.desc,
+        # Usados pelo Deck Builder para esmaecer no cliente cartas
+        # inelegíveis para uma zona/banlist — a validação de verdade
+        # continua no servidor (`DeckService.add_card`).
+        "frame_type": card.frame_type,
+        "ban_tcg": card.ban_tcg,
+        "ban_ocg": card.ban_ocg,
     }
     if with_prints:
         payload["prints"] = [print_to_dict(p) for p in card.prints]
@@ -155,3 +170,27 @@ def set_to_dict(card_set: CardSet) -> dict[str, Any]:
         "num_of_cards": card_set.num_of_cards,
         "tcg_date": card_set.tcg_date.isoformat() if card_set.tcg_date else None,
     }
+
+
+def deck_card_to_dict(deck_card: DeckCard) -> dict[str, Any]:
+    return {
+        "card_id": deck_card.card_id,
+        "card_name": deck_card.card.name,
+        "zone": deck_card.zone,
+        "quantity": deck_card.quantity,
+    }
+
+
+def deck_to_dict(deck: Deck, *, cards: list[DeckCard] | None = None) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "id": deck.id,
+        "name": deck.name,
+        "cover_card_id": deck.cover_card_id,
+        "build_mode": deck.build_mode,
+        "banlist": deck.banlist,
+        "created_at": deck.created_at.isoformat(),
+        "updated_at": deck.updated_at.isoformat(),
+    }
+    if cards is not None:
+        payload["cards"] = [deck_card_to_dict(c) for c in cards]
+    return payload

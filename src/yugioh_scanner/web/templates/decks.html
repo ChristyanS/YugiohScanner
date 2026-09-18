@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+{% block title %}{{ t('decks.title') }} — Yu-Gi-Oh! Scanner{% endblock %}
+{% block content %}
+<h1>{{ t('decks.title') }}</h1>
+
+<article id="form-error"></article>
+
+<form id="new-deck-form">
+  <div class="grid">
+    <label>{{ t('decks.name_label') }}
+      <input type="text" name="name" id="deck-name-input" required>
+    </label>
+    <label>{{ t('decks.build_mode_label') }}
+      <select name="build_mode">
+        {% for mode in build_modes %}
+        <option value="{{ mode }}">{{ t('deck.build_mode.collection_only') if mode == "collection_only" else t('deck.build_mode.full_db') }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>{{ t('decks.banlist_label') }}
+      <select name="banlist">
+        {% for banlist in banlists %}
+        <option value="{{ banlist }}">{{ banlist }}</option>
+        {% endfor %}
+      </select>
+    </label>
+  </div>
+  <button type="submit">{{ t('decks.create_button') }}</button>
+</form>
+
+<hr>
+
+<div id="decks-list"></div>
+
+<script>
+const errorBox = document.getElementById("form-error");
+const form = document.getElementById("new-deck-form");
+const decksList = document.getElementById("decks-list");
+
+function showError(message) {
+  errorBox.innerHTML = message ? `<div class="error-box">${message}</div>` : "";
+}
+
+async function loadDecks() {
+  const res = await fetch("/api/v1/decks");
+  const decks = await res.json();
+  if (!decks.length) {
+    decksList.innerHTML = `<p><em>${t("decks.no_decks")}</em></p>`;
+    return;
+  }
+  const rows = decks.map((d) => `
+    <tr>
+      <td><a href="/decks/${d.id}">${d.name}</a></td>
+      <td>${d.build_mode === "collection_only" ? t("deck.build_mode.collection_only") : t("deck.build_mode.full_db")}</td>
+      <td>${d.banlist}</td>
+    </tr>
+  `).join("");
+  decksList.innerHTML = `
+    <figure><table>
+      <thead><tr><th>${t("decks.table_name")}</th><th>${t("decks.table_mode")}</th><th>${t("decks.table_banlist")}</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table></figure>
+  `;
+}
+
+form.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  showError("");
+  const body = {
+    name: form.name.value,
+    build_mode: form.build_mode.value,
+    banlist: form.banlist.value,
+  };
+  const res = await fetch("/api/v1/decks", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const payload = await res.json();
+  if (!res.ok) { showError(payload.error || t("decks.create_failed")); return; }
+  window.location.href = `/decks/${payload.id}`;
+});
+
+loadDecks();
+</script>
+{% endblock %}

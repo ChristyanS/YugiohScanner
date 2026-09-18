@@ -1,7 +1,20 @@
 <!doctype html>
-<html lang="pt-br">
+<html lang="{{ request.state.ui_language | default('pt-BR') }}">
 <head>
   <meta charset="utf-8">
+  <script>
+    window.I18N = {{ t_catalog_json() | safe }};
+    // Ponte de tradução para <script> inline (Jinja `t()` não alcança JS) —
+    // mesmo contrato de `web/i18n/translate()`: chave ausente devolve a
+    // própria chave, substituição simples de "{placeholder}".
+    function t(key, params) {
+      let text = Object.prototype.hasOwnProperty.call(window.I18N, key) ? window.I18N[key] : key;
+      if (params) {
+        for (const k in params) text = text.split("{" + k + "}").join(params[k]);
+      }
+      return text;
+    }
+  </script>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}Yu-Gi-Oh! Collection Scanner{% endblock %}</title>
   <link rel="stylesheet" href="/static/vendor/pico.min.css">
@@ -14,15 +27,34 @@
       <li><strong>🎴 Yu-Gi-Oh! Scanner</strong></li>
     </ul>
     <ul>
-      <li><a href="/">Dashboard</a></li>
-      <li><a href="/scan">Scanner</a></li>
-      <li><a href="/review">Revisão{% if pending_count %} <mark>{{ pending_count }}</mark>{% endif %}</a></li>
-      <li><a href="/collection">Coleção</a></li>
-      <li><a href="/cards">Banco de Dados</a></li>
+      <li><a href="/">{{ t('nav.dashboard') }}</a></li>
+      <li><a href="/scan">{{ t('nav.scanner') }}</a></li>
+      <li><a href="/review">{{ t('nav.review') }}{% if pending_count %} <mark>{{ pending_count }}</mark>{% endif %}</a></li>
+      <li><a href="/collection">{{ t('nav.collection') }}</a></li>
+      <li><a href="/cards">{{ t('nav.database') }}</a></li>
+      <li><a href="/decks">{{ t('nav.decks') }}</a></li>
+    </ul>
+    <ul>
+      <li>
+        <select id="ui-language-select" aria-label="{{ t('nav.language_select') }}">
+          <option value="pt-BR" {% if request.state.ui_language == 'pt-BR' %}selected{% endif %}>PT-BR</option>
+          <option value="en" {% if request.state.ui_language == 'en' %}selected{% endif %}>EN</option>
+        </select>
+      </li>
     </ul>
   </nav>
   <main class="container">
     {% block content %}{% endblock %}
   </main>
+  <script>
+    document.getElementById("ui-language-select").addEventListener("change", async (e) => {
+      await fetch("/api/v1/settings/ui-language", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ language: e.target.value }),
+      });
+      window.location.reload();
+    });
+  </script>
 </body>
 </html>

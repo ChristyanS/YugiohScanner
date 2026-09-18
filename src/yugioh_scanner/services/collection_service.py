@@ -38,6 +38,7 @@ class CollectionStats:
     total_copies: int
     items_without_print: int
     sets_represented: int = 0
+    items_without_rarity: int = 0
 
     def as_dict(self) -> dict[str, int]:
         return {
@@ -45,6 +46,7 @@ class CollectionStats:
             "total_copies": self.total_copies,
             "items_without_print": self.items_without_print,
             "sets_represented": self.sets_represented,
+            "items_without_rarity": self.items_without_rarity,
         }
 
 
@@ -67,6 +69,7 @@ class CollectionService:
             total_copies=sum(item.quantity for item in items),
             items_without_print=sum(1 for item in items if item.card_print_id is None),
             sets_represented=len(sets),
+            items_without_rarity=sum(1 for item in items if item.rarity_display is None),
         )
 
     def list_items(
@@ -80,6 +83,8 @@ class CollectionService:
         descending: bool = False,
         limit: int | None = None,
         offset: int = 0,
+        locale: str = "EN",
+        lang: str = "EN",
     ) -> list[CollectionItem]:
         return self.repo.list_filtered(
             search=search,
@@ -90,6 +95,8 @@ class CollectionService:
             descending=descending,
             limit=limit,
             offset=offset,
+            lang=lang,
+            locale=locale,
         )
 
     def get_item(self, item_id: int) -> CollectionItem:
