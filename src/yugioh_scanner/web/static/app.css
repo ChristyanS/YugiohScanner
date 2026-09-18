@@ -85,13 +85,22 @@
    resolução empurram o resultado do OCR (nome/código/Card ID) para fora da
    tela, obrigando a rolar para ver os dois ao mesmo tempo (achado real do
    usuário). `.photo-wrap` é o que de fato controla a largura visível
-   (`img.roi` já tem `display:block` dentro dele). */
+   (`img.roi` já tem `display:block` dentro dele). `max-width` sozinho é
+   seguro para os dois casos (a caixa encolhe inteira, sem distorcer); já
+   `max-height` só pode ir no caso sem recorte — ver nota abaixo. */
 .review-grid .photo-wrap {
   max-width: 260px;
-  max-height: 55vh;
 }
 
-.review-grid .photo-wrap img.roi {
+/* `max-height` tem que ficar de fora de `.photo-wrap.cropped` (grade de
+   várias cartas por foto, `.photo-wrap.cropped` mais abaixo): o JS de
+   `updateCropOverlay` amplia a foto via `style.height` em porcentagem
+   (frequentemente > 100%) para a célula em revisão preencher o quadro
+   inteiro; um `max-height` aqui recorta esse valor por cima do inline
+   style e desalinha a matemática do zoom — bug real do usuário, a foto
+   passava a mostrar pedaço de duas cartas vizinhas em vez de só a célula
+   selecionada. */
+.review-grid .photo-wrap:not(.cropped) img.roi {
   max-height: 55vh;
   width: auto;
 }
