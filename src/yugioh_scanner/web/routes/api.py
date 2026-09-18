@@ -483,10 +483,14 @@ def delete_deck(deck_id: int, decks: DeckServiceDep) -> dict[str, bool]:
 
 @router.get("/decks/{deck_id}/search")
 def search_deck_pool(
-    deck_id: int, decks: DeckServiceDep, q: str | None = None, limit: int = Query(50, ge=1, le=200)
+    deck_id: int,
+    decks: DeckServiceDep,
+    q: str | None = None,
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
 ) -> list[dict[str, Any]]:
     deck = decks.get_deck(deck_id)
-    return [card_to_dict(c) for c in decks.searchable_pool(deck, q, limit=limit)]
+    return [card_to_dict(c) for c in decks.searchable_pool(deck, q, limit=limit, offset=offset)]
 
 
 @router.post("/decks/{deck_id}/cards")

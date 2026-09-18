@@ -243,6 +243,8 @@
   "deck_editor.add_zone_side": "+ Side",
   "deck_editor.add_card_failed": "Could not add the card",
   "deck_editor.remove_card_failed": "Failed to remove",
+  "deck_editor.drag_hint": "Drag cards between the list on the right and the deck zones (or back to remove them) — the +Main/+Side/+Extra buttons do the same without dragging.",
+  "deck_editor.detail_placeholder": "Select a card to see its details.",
 
   "print_options.choose_set_option": "choose a set...",
   "rarity_options.choose_rarity_option": "choose the rarity...",

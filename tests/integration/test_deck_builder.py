@@ -136,3 +136,18 @@ class TestDeckValidateAndSearch:
         client.post("/api/v1/collection", json={"name": "Dark Magician", "quantity": 1})
         res2 = client.get(f"/api/v1/decks/{deck_id}/search?q=dark")
         assert any(c["id"] == DARK_MAGICIAN for c in res2.json())
+
+    def test_search_offset_paginates(self, client: TestClient) -> None:
+        """Painel de navegação do Deck Builder (grid 6x5) pagina com
+        `offset` — `DeckService.searchable_pool` já aceitava o parâmetro,
+        só a rota não expunha."""
+        deck_id = client.post(
+            "/api/v1/decks", json={"name": "Deck", "build_mode": "full_db"}
+        ).json()["id"]
+        full = client.get(f"/api/v1/decks/{deck_id}/search?limit=200").json()
+        assert len(full) >= 2
+
+        first_page = client.get(f"/api/v1/decks/{deck_id}/search?limit=1&offset=0").json()
+        second_page = client.get(f"/api/v1/decks/{deck_id}/search?limit=1&offset=1").json()
+        assert first_page == [full[0]]
+        assert second_page == [full[1]]

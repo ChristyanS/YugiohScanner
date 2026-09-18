@@ -25,19 +25,38 @@
 
 <hr>
 
-<div class="review-grid">
-  <div>
+<p class="kbd-hint">{{ t('deck_editor.drag_hint') }}</p>
+
+<div class="deck-layout">
+  <aside id="deck-detail-panel" class="deck-detail-panel">
+    <p class="kbd-hint">{{ t('deck_editor.detail_placeholder') }}</p>
+  </aside>
+
+  <div class="deck-center">
+    <div class="deck-zone-heading">
+      <h3>{{ t('deck_editor.main_deck_heading') }} (<span id="main-count">0</span>)</h3>
+    </div>
+    <div id="zone-main" class="deck-zone-main"></div>
+
+    <div class="deck-zone-heading">
+      <h3>{{ t('deck_editor.side_deck_heading') }} (<span id="side-count">0</span>)</h3>
+    </div>
+    <div id="zone-side" class="deck-zone-row"></div>
+
+    <div class="deck-zone-heading">
+      <h3>{{ t('deck_editor.extra_deck_heading') }} (<span id="extra-count">0</span>)</h3>
+    </div>
+    <div id="zone-extra" class="deck-zone-row"></div>
+  </div>
+
+  <div class="deck-pool">
     <h3>{{ t('deck_editor.search_heading') }}</h3>
     <input type="search" id="deck-search-input" placeholder="{{ t('review.manual_search_placeholder') }}">
-    <ul id="deck-search-results" class="candidate-list"></ul>
-  </div>
-  <div>
-    <h3>{{ t('deck_editor.main_deck_heading') }} (<span id="main-count">0</span>)</h3>
-    <ul id="zone-main" class="candidate-list"></ul>
-    <h3>{{ t('deck_editor.extra_deck_heading') }} (<span id="extra-count">0</span>)</h3>
-    <ul id="zone-extra" class="candidate-list"></ul>
-    <h3>{{ t('deck_editor.side_deck_heading') }} (<span id="side-count">0</span>)</h3>
-    <ul id="zone-side" class="candidate-list"></ul>
+    <div id="deck-pool-grid" class="deck-pool-grid"></div>
+    <div class="deck-pool-pagination">
+      <button type="button" id="pool-prev" class="outline" disabled>{{ t('database.previous') }}</button>
+      <button type="button" id="pool-next" class="outline" disabled>{{ t('database.next') }}</button>
+    </div>
   </div>
 </div>
 
@@ -50,17 +69,22 @@ const deckBuildMode = document.getElementById("deck-build-mode");
 const deckBanlist = document.getElementById("deck-banlist");
 const saveNameButton = document.getElementById("save-name-button");
 const legalityPanel = document.getElementById("legality-panel");
+const detailPanel = document.getElementById("deck-detail-panel");
 const searchInput = document.getElementById("deck-search-input");
-const searchResults = document.getElementById("deck-search-results");
-const zoneLists = {
+const poolGrid = document.getElementById("deck-pool-grid");
+const poolPrevButton = document.getElementById("pool-prev");
+const poolNextButton = document.getElementById("pool-next");
+
+const ZONES = ["main", "side", "extra"];
+const zoneEls = {
   main: document.getElementById("zone-main"),
-  extra: document.getElementById("zone-extra"),
   side: document.getElementById("zone-side"),
+  extra: document.getElementById("zone-extra"),
 };
 const zoneCounts = {
   main: document.getElementById("main-count"),
-  extra: document.getElementById("extra-count"),
   side: document.getElementById("side-count"),
+  extra: document.getElementById("extra-count"),
 };
 
 const BUILD_MODE_LABELS = {
@@ -68,36 +92,124 @@ const BUILD_MODE_LABELS = {
   full_db: t("deck.build_mode.full_db"),
 };
 
+//: Selo de banlist na miniatura (plano do Deck Builder §5): símbolo curto +
+//: `title` com o valor bruto ("Forbidden"/"Limited"/"Semi-Limited") — mesmas
+//: strings que `Card.ban_tcg`/`.ban_ocg` já gravam, sem tradução própria
+//: (mesmo padrão de `decks.html` mostrando "TCG"/"OCG" sem traduzir).
+const BAN_BADGES = {
+  Forbidden: { symbol: "🚫", cls: "ban-forbidden" },
+  Limited: { symbol: "1", cls: "ban-limited" },
+  "Semi-Limited": { symbol: "½", cls: "ban-semi" },
+};
+
+let deck = null;
+//: Cache de `card_to_dict` por id — tanto as cartas do deck (buscadas uma
+//: vez em `loadDeck`) quanto as do painel de navegação (já vêm completas em
+//: cada página de busca) alimentam o mesmo cache, para não refazer fetch ao
+//: trocar a carta selecionada no painel de detalhe.
+const cardCache = new Map();
+let selectedDetailId = null;
+let poolOffset = 0;
+const POOL_PAGE_SIZE = 30; // grid 6x5
+
 function showError(message) {
   errorBox.innerHTML = message ? `<div class="error-box">${message}</div>` : "";
+}
+
+async function fetchCard(cardId) {
+  if (cardCache.has(cardId)) return cardCache.get(cardId);
+  const res = await fetch(`/api/v1/cards/${cardId}`);
+  const card = await res.json();
+  cardCache.set(cardId, card);
+  return card;
+}
+
+function banBadgeHtml(card) {
+  if (!card || !deck) return "";
+  const status = deck.banlist === "OCG" ? card.ban_ocg : card.ban_tcg;
+  const badge = BAN_BADGES[status];
+  return badge ? `<span class="ban-badge ${badge.cls}" title="${status}">${badge.symbol}</span>` : "";
+}
+
+function renderDetail(card) {
+  selectedDetailId = card.id;
+  const attributeText = card.attribute
+    ? ` &middot; <strong>${t("card_detail.attribute_label")}</strong> ${card.attribute}` : "";
+  const levelText = card.level
+    ? ` &middot; <strong>${t("card_detail.level_label")}</strong> ${card.level}` : "";
+  const atkDef = (card.atk === null || card.atk === undefined)
+    ? "" : `<p><strong>${t("card_detail.atk_def_label")}</strong> ${card.atk}/${card.def}${levelText}</p>`;
+  const archetypeText = card.archetype
+    ? `<p><strong>${t("card_detail.archetype_label")}</strong> ${card.archetype}</p>` : "";
+  detailPanel.innerHTML = `
+    <img src="/api/v1/cards/${card.id}/image?size=full" alt="${card.name}">
+    <h4>${card.name}</h4>
+    <p><strong>${t("card_detail.type_label")}</strong> ${card.type}${attributeText}</p>
+    ${atkDef}
+    ${archetypeText}
+    <p>${card.desc || ""}</p>
+  `;
+}
+
+async function selectDetail(cardId) {
+  const card = await fetchCard(cardId);
+  renderDetail(card);
+}
+
+function dragPayload(e) {
+  try {
+    return JSON.parse(e.dataTransfer.getData("application/json"));
+  } catch (err) {
+    return null;
+  }
+}
+
+function makeSlot(cardId, zone, card) {
+  const slot = document.createElement("div");
+  slot.className = "deck-slot";
+  slot.draggable = true;
+  slot.innerHTML = `<img src="/api/v1/cards/${cardId}/image?size=small" loading="lazy" alt="">${banBadgeHtml(card)}`;
+  slot.addEventListener("click", () => selectDetail(cardId));
+  slot.addEventListener("dragstart", (e) => {
+    e.dataTransfer.setData("application/json", JSON.stringify({ cardId, originZone: zone }));
+    e.dataTransfer.effectAllowed = "move";
+  });
+  return slot;
+}
+
+// Uma miniatura por cópia, nunca "x3" (plano do Deck Builder §5) — um deck
+// com 3 cópias de uma carta mostra 3 miniaturas iguais na zona, porque
+// `GET /decks/{id}` devolve quantidade agregada por (carta, zona), não uma
+// linha por cópia.
+function renderZones() {
+  for (const zone of ZONES) zoneEls[zone].innerHTML = "";
+  const totals = { main: 0, side: 0, extra: 0 };
+  (deck.cards || []).forEach((c) => {
+    totals[c.zone] += c.quantity;
+    const card = cardCache.get(c.card_id) || null;
+    for (let i = 0; i < c.quantity; i++) {
+      zoneEls[c.zone].appendChild(makeSlot(c.card_id, c.zone, card));
+    }
+  });
+  for (const zone of ZONES) zoneCounts[zone].textContent = String(totals[zone]);
 }
 
 async function loadDeck() {
   const res = await fetch(`/api/v1/decks/${deckId}`);
   if (!res.ok) { showError(t("deck_editor.not_found")); return; }
-  const deck = await res.json();
+  deck = await res.json();
   deckTitle.textContent = deck.name;
   deckNameInput.value = deck.name;
   deckBuildMode.value = BUILD_MODE_LABELS[deck.build_mode] || deck.build_mode;
   deckBanlist.value = deck.banlist;
 
-  for (const zone of ["main", "extra", "side"]) {
-    zoneLists[zone].innerHTML = "";
-    zoneCounts[zone].textContent = "0";
-  }
-  let totals = { main: 0, extra: 0, side: 0 };
-  (deck.cards || []).forEach((c) => {
-    totals[c.zone] += c.quantity;
-    const li = document.createElement("li");
-    li.innerHTML = `<strong>${c.quantity}x</strong> ${c.card_name}
-      <button type="button" class="secondary" data-remove-one>-1</button>
-      <button type="button" class="contrast outline" data-remove-all>${t("collection.remove_button")}</button>`;
-    li.querySelector("[data-remove-one]").addEventListener("click", () => removeCard(c.card_id, c.zone, 1));
-    li.querySelector("[data-remove-all]").addEventListener("click", () => removeCard(c.card_id, c.zone, null));
-    zoneLists[c.zone].appendChild(li);
-  });
-  for (const zone of ["main", "extra", "side"]) {
-    zoneCounts[zone].textContent = String(totals[zone]);
+  const uniqueIds = [...new Set((deck.cards || []).map((c) => c.card_id))];
+  await Promise.all(uniqueIds.filter((id) => !cardCache.has(id)).map((id) => fetchCard(id)));
+  renderZones();
+
+  if (selectedDetailId === null) {
+    const fallback = deck.cover_card_id || (deck.cards && deck.cards[0] && deck.cards[0].card_id);
+    if (fallback) selectDetail(fallback);
   }
 }
 
@@ -117,6 +229,123 @@ async function refresh() {
   await loadLegality();
 }
 
+async function addCard(cardId, zone) {
+  const res = await fetch(`/api/v1/decks/${deckId}/cards`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ card_id: cardId, zone, quantity: 1 }),
+  });
+  const payload = await res.json();
+  if (!res.ok) { showError(payload.error || t("deck_editor.add_card_failed")); return false; }
+  showError("");
+  await refresh();
+  return true;
+}
+
+async function removeCard(cardId, zone, quantity) {
+  const qs = quantity ? `?zone=${zone}&quantity=${quantity}` : `?zone=${zone}`;
+  const res = await fetch(`/api/v1/decks/${deckId}/cards/${cardId}${qs}`, { method: "DELETE" });
+  if (!res.ok) { const payload = await res.json(); showError(payload.error || t("deck_editor.remove_card_failed")); return false; }
+  showError("");
+  await refresh();
+  return true;
+}
+
+function wireDropTarget(el, onDrop) {
+  el.addEventListener("dragover", (e) => { e.preventDefault(); el.classList.add("dragover"); });
+  el.addEventListener("dragleave", () => el.classList.remove("dragover"));
+  el.addEventListener("drop", async (e) => {
+    e.preventDefault();
+    el.classList.remove("dragover");
+    const payload = dragPayload(e);
+    if (payload) await onDrop(payload);
+  });
+}
+
+// Arrastar entre zonas/coleção e o deck (plano do Deck Builder §5). Ordem
+// deliberada: adiciona no destino primeiro, só remove da origem se a adição
+// for aceita — solta uma carta de Fusão no Main (rejeitado pelo servidor) e
+// ela continua exatamente onde estava, em vez de desaparecer.
+for (const zone of ZONES) {
+  wireDropTarget(zoneEls[zone], async (payload) => {
+    if (payload.originZone === zone) return;
+    const added = await addCard(payload.cardId, zone);
+    if (added && ZONES.includes(payload.originZone)) {
+      await removeCard(payload.cardId, payload.originZone, 1);
+    }
+  });
+}
+
+// Soltar uma carta do deck de volta no painel de navegação remove 1 cópia
+// da zona de origem — o painel já lista o catálogo/coleção inteiro
+// independente do deck, não precisa de "adicionar" nada aqui.
+wireDropTarget(poolGrid, async (payload) => {
+  if (ZONES.includes(payload.originZone)) {
+    await removeCard(payload.cardId, payload.originZone, 1);
+  }
+});
+
+function makePoolCard(card) {
+  const wrap = document.createElement("div");
+  wrap.className = "deck-pool-card";
+  wrap.innerHTML = `
+    <div class="deck-slot">
+      <img src="/api/v1/cards/${card.id}/image?size=small" loading="lazy" alt="">
+      ${banBadgeHtml(card)}
+    </div>
+    <div class="deck-pool-add-row">
+      <button type="button" data-zone="main">${t("deck_editor.add_zone_main")}</button>
+      <button type="button" data-zone="side">${t("deck_editor.add_zone_side")}</button>
+      <button type="button" data-zone="extra">${t("deck_editor.add_zone_extra")}</button>
+    </div>
+  `;
+  const slot = wrap.querySelector(".deck-slot");
+  slot.draggable = true;
+  slot.addEventListener("click", () => selectDetail(card.id));
+  slot.addEventListener("dragstart", (e) => {
+    e.dataTransfer.setData("application/json", JSON.stringify({ cardId: card.id, originZone: "pool" }));
+    e.dataTransfer.effectAllowed = "move";
+  });
+  wrap.querySelectorAll("button[data-zone]").forEach((btn) => {
+    btn.addEventListener("click", () => addCard(card.id, btn.dataset.zone));
+  });
+  return wrap;
+}
+
+// Painel de navegação/busca (plano do Deck Builder §5): já respeita
+// `collection_only`/`full_db` sozinho, porque `DeckService.searchable_pool`
+// filtra por `build_mode` no servidor — nada a decidir aqui no cliente.
+async function runPoolSearch(resetOffset) {
+  if (resetOffset) poolOffset = 0;
+  const q = encodeURIComponent(searchInput.value || "");
+  const res = await fetch(`/api/v1/decks/${deckId}/search?q=${q}&limit=${POOL_PAGE_SIZE}&offset=${poolOffset}`);
+  const cards = await res.json();
+  cards.forEach((card) => cardCache.set(card.id, card));
+  poolGrid.innerHTML = "";
+  if (!cards.length) {
+    poolGrid.innerHTML = `<p><em>${t("common.no_cards_found")}</em></p>`;
+  } else {
+    cards.forEach((card) => poolGrid.appendChild(makePoolCard(card)));
+  }
+  poolPrevButton.disabled = poolOffset === 0;
+  poolNextButton.disabled = cards.length < POOL_PAGE_SIZE;
+}
+
+let searchTimer = null;
+searchInput.addEventListener("input", () => {
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => runPoolSearch(true), 250);
+});
+
+poolPrevButton.addEventListener("click", () => {
+  poolOffset = Math.max(0, poolOffset - POOL_PAGE_SIZE);
+  runPoolSearch(false);
+});
+poolNextButton.addEventListener("click", () => {
+  poolOffset += POOL_PAGE_SIZE;
+  runPoolSearch(false);
+});
+
 saveNameButton.addEventListener("click", async () => {
   const res = await fetch(`/api/v1/decks/${deckId}`, {
     method: "PUT",
@@ -129,55 +358,7 @@ saveNameButton.addEventListener("click", async () => {
   deckTitle.textContent = payload.name;
 });
 
-async function runSearch(query) {
-  const res = await fetch(`/api/v1/decks/${deckId}/search?q=${encodeURIComponent(query || "")}&limit=30`);
-  const cards = await res.json();
-  searchResults.innerHTML = "";
-  if (!cards.length) {
-    searchResults.innerHTML = `<li><em>${t("common.no_cards_found")}</em></li>`;
-    return;
-  }
-  cards.forEach((card) => {
-    const li = document.createElement("li");
-    li.innerHTML = `<img class="thumb" src="/api/v1/cards/${card.id}/image?size=small" loading="lazy" alt="">
-      <strong>${card.name}</strong>
-      <button type="button" data-zone="main">${t("deck_editor.add_zone_main")}</button>
-      <button type="button" data-zone="extra">${t("deck_editor.add_zone_extra")}</button>
-      <button type="button" data-zone="side">${t("deck_editor.add_zone_side")}</button>`;
-    li.querySelectorAll("button[data-zone]").forEach((btn) => {
-      btn.addEventListener("click", () => addCard(card.id, btn.dataset.zone));
-    });
-    searchResults.appendChild(li);
-  });
-}
-
-async function addCard(cardId, zone) {
-  showError("");
-  const res = await fetch(`/api/v1/decks/${deckId}/cards`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ card_id: cardId, zone, quantity: 1 }),
-  });
-  const payload = await res.json();
-  if (!res.ok) { showError(payload.error || t("deck_editor.add_card_failed")); return; }
-  await refresh();
-}
-
-async function removeCard(cardId, zone, quantity) {
-  showError("");
-  const qs = quantity ? `?zone=${zone}&quantity=${quantity}` : `?zone=${zone}`;
-  const res = await fetch(`/api/v1/decks/${deckId}/cards/${cardId}${qs}`, { method: "DELETE" });
-  if (!res.ok) { const payload = await res.json(); showError(payload.error || t("deck_editor.remove_card_failed")); return; }
-  await refresh();
-}
-
-let searchTimer = null;
-searchInput.addEventListener("input", () => {
-  clearTimeout(searchTimer);
-  searchTimer = setTimeout(() => runSearch(searchInput.value), 250);
-});
-
-runSearch("");
 refresh();
+runPoolSearch(true);
 </script>
 {% endblock %}
