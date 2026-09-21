@@ -21,7 +21,7 @@ atual do sistema), [`docs/adr/`](docs/adr/) (decisões individuais) e
 | 7 | Exportação | ✅ |
 | 8 | Interface Web | ✅ |
 | 9 | Calibração e performance | 🟡 parcial¹ |
-| 10 | Fallback por LLM Vision (opcional) | ⬜ |
+| 10 | Fallback por LLM Vision (opcional) | ⬜ Não iniciado |
 | 11 | Empacotamento e documentação | 🟡 parcial² |
 
 ¹ Performance (§20.5) e cobertura (§19.5) medidas e documentadas. Calibração
