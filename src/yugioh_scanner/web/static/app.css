@@ -69,9 +69,20 @@
   text-align: center;
 }
 
+/* Mesmo problema/solução de `.qty-btn` acima, para botões inline soltos no
+   meio de texto (ex.: "copiar código lido para o Set" na revisão) — sem
+   isto, o `<button>` de bloco 100% do Pico quebra a linha sozinho. */
+.inline-action-btn {
+  display: inline-block;
+  width: auto;
+  padding: 0.15rem 0.6rem;
+  margin-inline-start: 0.5rem;
+  font-size: 0.85rem;
+}
+
 .review-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: minmax(320px, 440px) 1fr;
   gap: 1.5rem;
 }
 
@@ -89,7 +100,7 @@
    seguro para os dois casos (a caixa encolhe inteira, sem distorcer); já
    `max-height` só pode ir no caso sem recorte — ver nota abaixo. */
 .review-grid .photo-wrap {
-  max-width: 260px;
+  max-width: 420px;
 }
 
 /* `max-height` tem que ficar de fora de `.photo-wrap.cropped` (grade de
@@ -101,7 +112,7 @@
    passava a mostrar pedaço de duas cartas vizinhas em vez de só a célula
    selecionada. */
 .review-grid .photo-wrap:not(.cropped) img.roi {
-  max-height: 55vh;
+  max-height: 65vh;
   width: auto;
 }
 
@@ -167,6 +178,74 @@
   object-fit: fill;
 }
 
+/* Ampliar ao passar o mouse (pedido do usuário, tela de detalhe do scan):
+   `.photo-zoom` é uma segunda cópia da mesma foto, maior, escondida até o
+   hover do contêiner. Em foto de grade (`.cropped`), reusa exatamente o
+   mesmo `style` inline (largura/altura/posição em %) que o thumbnail já
+   calcula a partir de `source_bbox` — a matemática é relativa ao próprio
+   contêiner, então funciona igual num contêiner maior sem recalcular nada. */
+.photo-hover {
+  position: relative;
+  display: inline-block;
+}
+
+.photo-zoom {
+  display: none;
+  position: absolute;
+  z-index: 20;
+  left: 0;
+  top: 100%;
+  margin-top: 0.25rem;
+  width: 220px;
+  aspect-ratio: 59 / 86;
+  overflow: hidden;
+  border: 1px solid var(--pico-muted-border-color);
+  border-radius: 6px;
+  background: var(--pico-card-sectioning-background-color);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+}
+
+.photo-zoom img.roi {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.photo-zoom.cropped img.roi {
+  position: absolute;
+  max-width: none;
+  object-fit: fill;
+}
+
+.photo-hover:hover .photo-zoom {
+  display: block;
+}
+
+/* Lupa ao passar o mouse na foto da revisão principal (pedido do usuário,
+   mesmo mecanismo de sites de compra): `.magnifier-lens` é o quadro que
+   acompanha o cursor sobre `.photo-wrap`; `.magnifier-result` é o painel
+   fixo (posicionado via JS, `moveMagnifier` em review.html) que mostra essa
+   região ampliada. */
+.magnifier-lens {
+  position: absolute;
+  border: 2px solid var(--pico-primary);
+  background: color-mix(in srgb, var(--pico-primary) 15%, transparent);
+  pointer-events: none;
+  z-index: 15;
+}
+
+.magnifier-result {
+  position: fixed;
+  border: 1px solid var(--pico-muted-border-color);
+  border-radius: 6px;
+  background-color: var(--pico-card-sectioning-background-color);
+  background-repeat: no-repeat;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  pointer-events: none;
+  z-index: 50;
+}
+
 .crop-label {
   font-weight: 600;
   color: var(--pico-primary);
@@ -198,6 +277,32 @@
 .selected-label {
   font-weight: 600;
   color: var(--pico-primary);
+}
+
+/* Autosuggest do campo de busca de Set na revisão (pedido do usuário: ficar
+   sugerindo enquanto digita) — `.autosuggest-wrap` dá o contexto de
+   posicionamento para `#print-suggestions` flutuar como dropdown logo
+   abaixo do campo, sem empurrar o `<select>` de raridade para baixo. */
+.autosuggest-wrap {
+  position: relative;
+}
+
+.suggestions-list {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  z-index: 30;
+  max-height: 220px;
+  overflow-y: auto;
+  background: var(--pico-background-color);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+}
+
+.suggestions-list li {
+  padding: 0.4rem 0.6rem;
+  margin-block-end: 0;
+  border-radius: 0;
 }
 
 .kbd-hint {
@@ -279,6 +384,14 @@ progress { width: 100%; }
   line-height: 1.2;
 }
 
+/* Set + raridade na galeria da Coleção (pedido do usuário: mesma informação
+   que a visão em lista já mostra em colunas próprias). */
+.gallery-print-info {
+  font-size: 0.65rem;
+  color: var(--pico-muted-color);
+  line-height: 1.2;
+}
+
 .pagination {
   display: flex;
   justify-content: space-between;
@@ -335,22 +448,27 @@ progress { width: 100%; }
 }
 
 /* Main Deck: grid fixo de 10 colunas — cartas em excesso quebram para a
-   próxima linha (não precisa de rolagem horizontal). */
+   próxima linha (não precisa de rolagem horizontal). `min-height` garante
+   que a zona vazia ainda tenha uma área grande o bastante para soltar uma
+   carta arrastada (achado real do usuário: sem cartas dentro, o grid fica
+   com altura 0 e o drop-and-drop não tem onde acontecer). */
 .deck-zone-main {
   display: grid;
   grid-template-columns: repeat(10, 1fr);
   gap: 0.4rem;
+  min-height: 5rem;
 }
 
-/* Side/Extra: uma linha só de até 15 cartas — `minmax` evita que a
-   miniatura fique ilegível em telas estreitas; rola na horizontal nesse
-   caso em vez de quebrar linha (pedido do usuário: "numa única linha"). */
+/* Side/Extra: `auto-fill` quebra em quantas linhas forem necessárias para
+   caber na largura disponível — nunca precisa de rolagem horizontal, todas
+   as cartas ficam visíveis de uma vez (pedido do usuário). Mesmo
+   `min-height` do Main Deck para a zona vazia continuar sendo um alvo de
+   arrastar válido. */
 .deck-zone-row {
   display: grid;
-  grid-template-columns: repeat(15, minmax(44px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(44px, 1fr));
   gap: 0.3rem;
-  overflow-x: auto;
-  padding-block-end: 0.25rem;
+  min-height: 5rem;
 }
 
 .deck-slot {
@@ -393,6 +511,22 @@ progress { width: 100%; }
 .ban-limited { background: #a15c00; }
 .ban-semi { background: #6b6b00; }
 
+/* Modo "só coleção" (plano do Deck Builder): quantas cópias possuídas ainda
+   não foram usadas neste deck — canto oposto ao selo de banlist para não
+   sobrepor os dois. */
+.remaining-badge {
+  position: absolute;
+  bottom: 2px;
+  right: 2px;
+  font-size: 0.65rem;
+  font-weight: 700;
+  padding: 0 0.3rem;
+  border-radius: 3px;
+  background: var(--pico-primary);
+  color: var(--pico-primary-inverse);
+  line-height: 1.3;
+}
+
 .deck-pool {
   display: flex;
   flex-direction: column;
@@ -410,18 +544,6 @@ progress { width: 100%; }
   display: flex;
   flex-direction: column;
   gap: 0.2rem;
-}
-
-.deck-pool-add-row {
-  display: flex;
-  gap: 0.15rem;
-}
-
-.deck-pool-add-row button {
-  flex: 1;
-  font-size: 0.6rem;
-  padding: 0.1rem 0.15rem;
-  margin: 0;
 }
 
 .deck-pool-pagination {

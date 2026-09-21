@@ -8,7 +8,7 @@ espírito de `repositories/collection.py`.
 
 from __future__ import annotations
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from ..db.tables import Deck, DeckCard, utcnow
@@ -32,6 +32,15 @@ class DeckRepository:
 
     def delete(self, deck: Deck) -> None:
         self.session.delete(deck)
+
+    def clear_all(self) -> int:
+        """Apaga TODOS os decks de uma vez (pedido do usuário: "limpar todos
+        os decks"). `DeckCard` some por cascata de FK; mesmo motivo de usar
+        `DELETE` em massa em vez de um loop de `ScanRepository.clear_all_jobs`."""
+        count = len(self.session.scalars(select(Deck.id)).all())
+        self.session.execute(delete(Deck))
+        self.session.flush()
+        return count
 
     def cards_for_deck(self, deck_id: int) -> list[DeckCard]:
         return list(self.session.scalars(select(DeckCard).where(DeckCard.deck_id == deck_id)))

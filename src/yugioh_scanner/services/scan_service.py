@@ -387,6 +387,25 @@ class ScanService:
         for result in results:
             result.card_name = names.get(result.card_id) if result.card_id is not None else None
 
+    def _attach_print_info(self, session: Session, results: list[ScanResult]) -> None:
+        """Anexa o set/raridade **resolvidos no catálogo** de `card_print_id`
+        (não o texto bruto do OCR) — o comparador da tela de detalhe do scan
+        (plano do usuário: conferir visualmente a leitura contra o que foi
+        de fato gravado). Uma query só para o lote inteiro, mesmo espírito de
+        `_attach_code_prints`/`_attach_card_names`.
+        """
+        print_ids = {r.card_print_id for r in results if r.card_print_id is not None}
+        prints: dict[int, CardPrint] = {}
+        if print_ids:
+            rows = session.scalars(select(CardPrint).where(CardPrint.id.in_(print_ids)))
+            prints = {row.id: row for row in rows}
+        for result in results:
+            card_print = (
+                prints.get(result.card_print_id) if result.card_print_id is not None else None
+            )
+            result.resolved_set_code = card_print.set_code_full if card_print else None
+            result.resolved_rarity = card_print.rarity if card_print else None
+
     def get_image_path(self, scan_image_id: int) -> Path:
         """Caminho no disco da foto original (Fase 8: `/review` mostra a
         foto ao lado da leitura — nunca aceita caminho vindo do cliente, só
@@ -461,7 +480,38 @@ class ScanService:
                     set_code_full = None
                     rarity_override = None
 
-            resolved_language = language or result.detected_language or DEFAULT_LANGUAGE
+            # `result.detected_language` vem de ler a carta física (nome/código)
+            # e continua tendo prioridade — inclusive sobre o print escolhido,
+            # porque o fallback de idioma (ADR 0009/0012, `matching/resolver.py`)
+            # deliberadamente resolve para um print EM INGLÊS quando a carta é
+            # PT/DE/FR/IT mas aquele print específico não tem edição regional
+            # catalogada; `card_print.region` mentiria "EN" nesse caso. Só cai
+            # para a região do print quando a leitura não capturou idioma
+            # nenhum — achado real do usuário: o OCR trocou "PT011" por "1T011"
+            # (P→1, erro comum, `domain/setcode.py`), a revisão confirmou
+            # manualmente o print certo (region="PT"), mas sem isto a cópia
+            # entrava com `language="EN"` e virava uma segunda linha na coleção
+            # em vez de somar na cópia já existente do mesmo print.
+            print_region = (
+                session.scalar(select(CardPrint.region).where(CardPrint.id == card_print_id))
+                if card_print_id is not None
+                else None
+            )
+            resolved_language = (
+                language or result.detected_language or print_region or DEFAULT_LANGUAGE
+            )
+            if not (2 <= len(resolved_language) <= 3 and resolved_language.isupper()):
+                # Mesmo limiar do CHECK de `card_print_override`
+                # (`ck_card_print_override_language_format`). `detected_language`
+                # normalmente já vem validado (`PrintResolver.resolve` só confia
+                # em região de 1 letra depois de casar no catálogo), mas linhas
+                # gravadas antes dessa correção — ou um `language` arbitrário
+                # vindo da API — ainda podem carregar lixo. Cair para o padrão
+                # aqui é melhor que estourar `IntegrityError` dentro do flush lá
+                # embaixo e desfazer a confirmação inteira sem erro nenhum
+                # visível na tela (achado real: Scan #11, "P" de "PT" corrompido
+                # pelo OCR travava a revisão dessas cartas para sempre).
+                resolved_language = DEFAULT_LANGUAGE
             key = CollectionKey(
                 card_id=card_id,
                 card_print_id=card_print_id,
@@ -517,6 +567,12 @@ class ScanService:
                 raise ScanResultNotFoundError(result_id)
             scan_repo.mark_decided(result, decision=_DECISION_REJECTED)
 
+    def reject_all_pending(self) -> int:
+        """Rejeita toda a fila de revisão de uma vez. Devolve quantos itens
+        foram removidos da fila, para a UI confirmar o que aconteceu."""
+        with self.database.session() as session:
+            return ScanRepository(session).reject_all_pending()
+
     # -------------------------------------------------------------------- jobs
 
     def recent_jobs(self, limit: int = 10) -> list[ScanJob]:
@@ -533,6 +589,23 @@ class ScanService:
             session.expunge(job)
             return job
 
+    def delete_job(self, job_id: int) -> None:
+        """Apaga um job de scan e suas fotos/leituras (pedido do usuário:
+        "limpar scans", plano §10.1/§10.2). Nunca toca na coleção — ver
+        `ScanRepository.delete_job`."""
+        with self.database.session() as session:
+            scan_repo = ScanRepository(session)
+            job = scan_repo.get_job(job_id)
+            if job is None:
+                raise JobNotFoundError(job_id)
+            scan_repo.delete_job(job)
+
+    def clear_all_jobs(self) -> int:
+        """Apaga todos os jobs de scan de uma vez. Devolve quantos foram
+        removidos, para a UI confirmar o que aconteceu."""
+        with self.database.session() as session:
+            return ScanRepository(session).clear_all_jobs()
+
     def job_results(self, job_id: int) -> list[ScanResult]:
         """Os resultados de um job (Fase 8: `GET /scan/{id}` e `/api/v1/scans/{id}/results`)."""
         with self.database.session() as session:
@@ -541,6 +614,10 @@ class ScanService:
             results = ScanRepository(session).results_for_job(job_id)
             for result in results:
                 _ = result.scan_image.file_path
+            # Comparador da tela de detalhe do scan (pedido do usuário): nome
+            # e set/raridade resolvidos, ao lado do texto bruto do OCR.
+            self._attach_card_names(session, results)
+            self._attach_print_info(session, results)
             session.expunge_all()
             return results
 
@@ -586,10 +663,24 @@ class ScanService:
 
         job = None
         if apply:
+            # Mesma resolução de `None` que `_handle_crop` aplica por recorte
+            # (settings.auto_requires_print/rarity como default do override
+            # por scan) — calculada uma vez aqui só para congelar no job
+            # qual política valeu para esta execução (ver comentário em
+            # `ScanJob.auto_enabled` sobre por quê).
+            effective_require_set = (
+                self.settings.auto_requires_print if require_set is None else require_set
+            )
+            effective_require_rarity = (
+                self.settings.auto_requires_rarity if require_rarity is None else require_rarity
+            )
             job = scan_repo.create_job(
                 folder_path=str(report.folder),
                 ocr_provider=provider_name or self.settings.ocr_provider,
                 workers=workers or self.settings.effective_workers,
+                auto_enabled=not no_auto,
+                require_set=effective_require_set,
+                require_rarity=effective_require_rarity,
             )
             report.job_id = job.id
 

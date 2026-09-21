@@ -91,6 +91,11 @@ class DeckService:
     def delete_deck(self, deck_id: int) -> None:
         self.repo.delete(self.get_deck(deck_id))
 
+    def clear_all_decks(self) -> int:
+        """Apaga todos os decks de uma vez. Devolve quantos foram removidos,
+        para a UI confirmar o que aconteceu."""
+        return self.repo.clear_all()
+
     # --------------------------------------------------------------- cartas
 
     def add_card(self, deck_id: int, card_id: int, zone: str, *, quantity: int = 1) -> DeckCard:
@@ -205,6 +210,16 @@ class DeckService:
                     cards.append(item.card)
             return cards
         return self.catalog.search_cards(query, limit=limit, offset=offset)
+
+    def remaining_copies(self, deck: Deck, card: Card) -> int:
+        """No modo `collection_only`, quantas cópias possuídas de `card` ainda
+        não foram usadas neste deck (plano do Deck Builder §5: selo na
+        miniatura da busca). Nunca negativo — `add_card` já bloqueia exceder
+        a posse, mas um deck criado antes de perder cópias da coleção (ex.:
+        item removido depois) não deve exibir número negativo."""
+        owned = self.collection_repo.total_owned(card.id)
+        in_deck = self.repo.total_copies_in_deck(deck.id, card.id)
+        return max(0, owned - in_deck)
 
     def _copy_limit(self, card: Card, banlist: str) -> int:
         status = card.ban_tcg if banlist == "TCG" else card.ban_ocg

@@ -219,6 +219,17 @@ def get_scan(job_id: int, scans: ScanServiceDep) -> dict[str, Any]:
     return job_to_dict(scans.job_detail(job_id))
 
 
+@router.delete("/scans/{job_id}")
+def delete_scan(job_id: int, scans: ScanServiceDep) -> dict[str, bool]:
+    scans.delete_job(job_id)
+    return {"removed": True}
+
+
+@router.delete("/scans")
+def clear_scans(scans: ScanServiceDep) -> dict[str, int]:
+    return {"removed": scans.clear_all_jobs()}
+
+
 @router.get("/scans/{job_id}/results")
 def get_scan_results(
     job_id: int, scans: ScanServiceDep, decision: str | None = None
@@ -325,6 +336,11 @@ def reject_scan_result(result_id: int, scans: ScanServiceDep) -> dict[str, bool]
     return {"rejected": True}
 
 
+@router.post("/scan-results/reject-all")
+def reject_all_scan_results(scans: ScanServiceDep) -> dict[str, int]:
+    return {"removed": scans.reject_all_pending()}
+
+
 # ---------------------------------------------------------------- coleção
 
 
@@ -426,6 +442,11 @@ def delete_collection_item(item_id: int, collection: CollectionServiceDep) -> di
     return {"removed": True}
 
 
+@router.delete("/collection")
+def clear_collection(collection: CollectionServiceDep) -> dict[str, int]:
+    return {"removed": collection.clear_all()}
+
+
 # ------------------------------------------------------------- deck builder
 
 
@@ -481,6 +502,11 @@ def delete_deck(deck_id: int, decks: DeckServiceDep) -> dict[str, bool]:
     return {"removed": True}
 
 
+@router.delete("/decks")
+def clear_decks(decks: DeckServiceDep) -> dict[str, int]:
+    return {"removed": decks.clear_all_decks()}
+
+
 @router.get("/decks/{deck_id}/search")
 def search_deck_pool(
     deck_id: int,
@@ -490,7 +516,14 @@ def search_deck_pool(
     offset: int = Query(0, ge=0),
 ) -> list[dict[str, Any]]:
     deck = decks.get_deck(deck_id)
-    return [card_to_dict(c) for c in decks.searchable_pool(deck, q, limit=limit, offset=offset)]
+    cards = decks.searchable_pool(deck, q, limit=limit, offset=offset)
+    payload = [card_to_dict(c) for c in cards]
+    if deck.build_mode == "collection_only":
+        # Selo "cópias restantes" (plano do Deck Builder §5) — só faz sentido
+        # neste modo, onde a coleção é o teto de quantas cópias entram.
+        for card_dict, card in zip(payload, cards, strict=True):
+            card_dict["remaining"] = decks.remaining_copies(deck, card)
+    return payload
 
 
 @router.post("/decks/{deck_id}/cards")

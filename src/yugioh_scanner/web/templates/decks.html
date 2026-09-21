@@ -41,26 +41,62 @@ function showError(message) {
   errorBox.innerHTML = message ? `<div class="error-box">${message}</div>` : "";
 }
 
+//: Guardado pelo id — as ações de exclusão (por deck) precisam do nome só
+//: para a mensagem de confirmação, e ler daqui evita jogar o nome dentro de
+//: um atributo HTML (que quebraria com aspas no nome do deck).
+let decksById = new Map();
+
 async function loadDecks() {
   const res = await fetch("/api/v1/decks");
   const decks = await res.json();
+  decksById = new Map(decks.map((d) => [d.id, d]));
   if (!decks.length) {
     decksList.innerHTML = `<p><em>${t("decks.no_decks")}</em></p>`;
     return;
   }
   const rows = decks.map((d) => `
-    <tr>
+    <tr id="deck-row-${d.id}">
       <td><a href="/decks/${d.id}">${d.name}</a></td>
       <td>${d.build_mode === "collection_only" ? t("deck.build_mode.collection_only") : t("deck.build_mode.full_db")}</td>
       <td>${d.banlist}</td>
+      <td><button type="button" class="contrast outline" data-delete-deck="${d.id}">${t("decks.delete_button")}</button></td>
     </tr>
   `).join("");
   decksList.innerHTML = `
     <figure><table>
-      <thead><tr><th>${t("decks.table_name")}</th><th>${t("decks.table_mode")}</th><th>${t("decks.table_banlist")}</th></tr></thead>
+      <thead><tr><th>${t("decks.table_name")}</th><th>${t("decks.table_mode")}</th><th>${t("decks.table_banlist")}</th><th>${t("decks.table_actions")}</th></tr></thead>
       <tbody>${rows}</tbody>
     </table></figure>
+    <button type="button" id="clear-all-decks-button" class="contrast outline">${t("decks.clear_all_button")}</button>
   `;
+  wireDeckActions();
+}
+
+// Reconstruído a cada `loadDecks()` (a lista inteira é substituída via
+// `innerHTML`), então os listeners precisam ser religados a cada chamada —
+// mesmo motivo de `manualSearchResults`/`candidatesEl` em review.html.
+function wireDeckActions() {
+  decksList.querySelectorAll("[data-delete-deck]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const deckId = parseInt(btn.dataset.deleteDeck, 10);
+      const deck = decksById.get(deckId);
+      if (!confirm(t("decks.confirm_delete", { name: deck ? deck.name : deckId }))) return;
+      const res = await fetch(`/api/v1/decks/${deckId}`, { method: "DELETE" });
+      if (!res.ok) { showError(t("decks.delete_failed")); return; }
+      showError("");
+      await loadDecks();
+    });
+  });
+  const clearAllButton = document.getElementById("clear-all-decks-button");
+  if (clearAllButton) {
+    clearAllButton.addEventListener("click", async () => {
+      if (!confirm(t("decks.confirm_clear_all"))) return;
+      const res = await fetch("/api/v1/decks", { method: "DELETE" });
+      if (!res.ok) { showError(t("decks.delete_failed")); return; }
+      showError("");
+      await loadDecks();
+    });
+  }
 }
 
 form.addEventListener("submit", async (e) => {

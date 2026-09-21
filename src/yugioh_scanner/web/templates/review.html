@@ -6,15 +6,19 @@
 
 <div id="empty-state" hidden><p><em>{{ t('review.empty_state') }}</em></p></div>
 <p id="counter"></p>
+<p><button type="button" id="clear-all-reviews-button" class="contrast outline" hidden>{{ t('review.clear_all_button') }}</button></p>
 
 <div id="review-body" class="review-grid" hidden>
   <div>
     <div id="photo-wrap" class="photo-wrap">
       <img id="photo" class="roi" alt="{{ t('review.photo_alt') }}">
+      <div id="magnifier-lens" class="magnifier-lens" hidden></div>
     </div>
     <p id="crop-label" class="crop-label" hidden></p>
     <p><strong>{{ t('review.ocr_name_label') }}</strong> <span id="ocr-name"></span></p>
-    <p><strong>{{ t('review.ocr_code_label') }}</strong> <span id="ocr-code"></span></p>
+    <p><strong>{{ t('review.ocr_code_label') }}</strong> <span id="ocr-code"></span>
+      <button type="button" id="copy-ocr-code-button" class="secondary outline inline-action-btn" hidden>{{ t('review.copy_code_button') }}</button>
+    </p>
     <p><strong>{{ t('review.ocr_passcode_label') }}</strong> <span id="ocr-passcode"></span></p>
     <p id="passcode-badge" class="selected-label" hidden>{{ t('review.passcode_badge') }}</p>
   </div>
@@ -33,7 +37,10 @@
 
     <div id="print-section" hidden>
       <label>{{ t('review.set_label') }}
-        <input type="search" id="print-search" placeholder="{{ t('review.print_search_placeholder') }}">
+        <div class="autosuggest-wrap">
+          <input type="search" id="print-search" placeholder="{{ t('review.print_search_placeholder') }}" autocomplete="off">
+          <ul id="print-suggestions" class="candidate-list suggestions-list" hidden></ul>
+        </div>
         <select id="set-select"></select>
       </label>
       <small id="print-count"></small>
@@ -79,6 +86,7 @@ let selectedPrint = null;
 let currentPrints = [];
 
 const counter = document.getElementById("counter");
+const clearAllReviewsButton = document.getElementById("clear-all-reviews-button");
 const emptyState = document.getElementById("empty-state");
 const body = document.getElementById("review-body");
 const photo = document.getElementById("photo");
@@ -86,12 +94,14 @@ const photoWrap = document.getElementById("photo-wrap");
 const cropLabel = document.getElementById("crop-label");
 const ocrName = document.getElementById("ocr-name");
 const ocrCode = document.getElementById("ocr-code");
+const copyOcrCodeButton = document.getElementById("copy-ocr-code-button");
 const ocrPasscode = document.getElementById("ocr-passcode");
 const passcodeBadge = document.getElementById("passcode-badge");
 const candidatesEl = document.getElementById("candidates");
 const candidatesHint = document.getElementById("candidates-hint");
 const printSection = document.getElementById("print-section");
 const printSearch = document.getElementById("print-search");
+const printSuggestions = document.getElementById("print-suggestions");
 const setSelect = document.getElementById("set-select");
 const raritySelect = document.getElementById("rarity-select");
 const printCount = document.getElementById("print-count");
@@ -169,16 +179,98 @@ function updateCropOverlay(r) {
   }
 }
 
+const magnifierLens = document.getElementById("magnifier-lens");
+let magnifierResult = null;
+const MAGNIFIER_ZOOM = 2.5;
+const MAGNIFIER_LENS_SIZE = 110;
+const MAGNIFIER_RESULT_SIZE = 320;
+
+function ensureMagnifierResult() {
+  if (!magnifierResult) {
+    magnifierResult = document.createElement("div");
+    magnifierResult.className = "magnifier-result";
+    magnifierResult.hidden = true;
+    document.body.appendChild(magnifierResult);
+  }
+  return magnifierResult;
+}
+
+function hideMagnifier() {
+  magnifierLens.hidden = true;
+  if (magnifierResult) magnifierResult.hidden = true;
+}
+
+// Lupa como em sites de compra (pedido do usuário): ao passar o mouse sobre a
+// foto, um quadro pequeno (`.magnifier-lens`) segue o cursor e um painel fixo
+// ao lado (`.magnifier-result`) mostra essa região ampliada. Usa os
+// retângulos *renderizados* de `photoWrap`/`photo` (via `getBoundingClientRect`,
+// não o tamanho natural do arquivo) — funciona igual em foto de grade, onde
+// `updateCropOverlay` já ampliou/deslocou a própria `<img>` via CSS antes
+// deste código rodar, sem precisar recalcular nada daquela matemática aqui.
+function moveMagnifier(e) {
+  const rect = photoWrap.getBoundingClientRect();
+  const imgRect = photo.getBoundingClientRect();
+  if (!imgRect.width || !imgRect.height) return;
+  const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+  const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+  const cx = clientX - rect.left;
+  const cy = clientY - rect.top;
+  if (cx < 0 || cy < 0 || cx > rect.width || cy > rect.height) { hideMagnifier(); return; }
+
+  let lensX = cx - MAGNIFIER_LENS_SIZE / 2;
+  let lensY = cy - MAGNIFIER_LENS_SIZE / 2;
+  lensX = Math.max(0, Math.min(lensX, rect.width - MAGNIFIER_LENS_SIZE));
+  lensY = Math.max(0, Math.min(lensY, rect.height - MAGNIFIER_LENS_SIZE));
+  magnifierLens.style.width = `${MAGNIFIER_LENS_SIZE}px`;
+  magnifierLens.style.height = `${MAGNIFIER_LENS_SIZE}px`;
+  magnifierLens.style.left = `${lensX}px`;
+  magnifierLens.style.top = `${lensY}px`;
+  magnifierLens.hidden = false;
+
+  const imgOffsetX = imgRect.left - rect.left;
+  const imgOffsetY = imgRect.top - rect.top;
+  const bgWidth = imgRect.width * MAGNIFIER_ZOOM;
+  const bgHeight = imgRect.height * MAGNIFIER_ZOOM;
+  const centerX = lensX + MAGNIFIER_LENS_SIZE / 2 - imgOffsetX;
+  const centerY = lensY + MAGNIFIER_LENS_SIZE / 2 - imgOffsetY;
+  const bgX = -(centerX * MAGNIFIER_ZOOM - MAGNIFIER_RESULT_SIZE / 2);
+  const bgY = -(centerY * MAGNIFIER_ZOOM - MAGNIFIER_RESULT_SIZE / 2);
+
+  const result = ensureMagnifierResult();
+  result.style.width = `${MAGNIFIER_RESULT_SIZE}px`;
+  result.style.height = `${MAGNIFIER_RESULT_SIZE}px`;
+  result.style.backgroundImage = `url('${photo.src}')`;
+  result.style.backgroundSize = `${bgWidth}px ${bgHeight}px`;
+  result.style.backgroundPosition = `${bgX}px ${bgY}px`;
+  let resultLeft = rect.right + 12;
+  if (resultLeft + MAGNIFIER_RESULT_SIZE > window.innerWidth) {
+    resultLeft = Math.max(0, rect.left - MAGNIFIER_RESULT_SIZE - 12);
+  }
+  let resultTop = rect.top;
+  if (resultTop + MAGNIFIER_RESULT_SIZE > window.innerHeight) {
+    resultTop = Math.max(0, window.innerHeight - MAGNIFIER_RESULT_SIZE - 12);
+  }
+  result.style.left = `${resultLeft}px`;
+  result.style.top = `${resultTop}px`;
+  result.hidden = false;
+}
+
+photoWrap.addEventListener("mousemove", moveMagnifier);
+photoWrap.addEventListener("mouseleave", hideMagnifier);
+
 function render() {
   showError("");
+  hideMagnifier();
   if (!queue.length) {
     emptyState.hidden = false;
     body.hidden = true;
     counter.textContent = "";
+    clearAllReviewsButton.hidden = true;
     return;
   }
   emptyState.hidden = true;
   body.hidden = false;
+  clearAllReviewsButton.hidden = false;
   counter.textContent = t("review.counter", { current: index + 1, total: queue.length });
 
   const r = current();
@@ -186,6 +278,7 @@ function render() {
   updateCropOverlay(r);
   ocrName.textContent = r.ocr_name_raw || t("review.empty_value");
   ocrCode.textContent = r.ocr_code_raw || t("review.empty_value");
+  copyOcrCodeButton.hidden = !r.ocr_code_raw;
   // Prefere a versão limpa (só dígitos — `domain/passcode.py::clean_passcode`)
   // à leitura bruta: o passcode só pode ser número, e o bruto às vezes vem
   // colado com "1ª Edição"/copyright (achado real: a ROI precisa de folga
@@ -201,6 +294,8 @@ function render() {
   setSelect.innerHTML = "";
   raritySelect.innerHTML = "";
   printSearch.value = "";
+  printSuggestions.hidden = true;
+  printSuggestions.innerHTML = "";
   printCount.textContent = "";
   rarityUnlistedWrap.hidden = true;
   rarityUnlistedCheck.checked = false;
@@ -313,6 +408,74 @@ function renderSetOptions(filterText) {
     : t("common.print_options_count", { count: sets.length });
 }
 
+//: Teto de itens no dropdown de sugestão — bem menor que `PRINT_OPTIONS_CAP`
+//: porque aqui é uma lista visível abaixo do campo, não um `<select>` que o
+//: usuário abre de propósito (pedido do usuário: sugerir enquanto digita).
+const PRINT_SUGGESTIONS_CAP = 8;
+
+// Autosuggest visível do campo de busca de set (pedido do usuário: "ficar
+// sugerindo set enquanto escrevemos") — reaproveita a mesma filtragem de
+// `renderSetOptions`, mas numa lista clicável logo abaixo do campo em vez de
+// só dentro do `<select>`, que exige abrir o dropdown pra ver o resultado.
+function renderPrintSuggestions(filterText) {
+  const q = (filterText || "").trim().toLowerCase();
+  if (!q) { printSuggestions.hidden = true; printSuggestions.innerHTML = ""; return; }
+  const bySetCode = new Map();
+  for (const p of currentPrints) {
+    if (!bySetCode.has(p.set_code)) bySetCode.set(p.set_code, p);
+  }
+  let sets = [...bySetCode.values()].filter(
+    (p) => `${p.set_code} ${p.set_name || ""} ${p.region || ""}`.toLowerCase().includes(q)
+  );
+  sets.sort((a, b) => a.set_code.localeCompare(b.set_code));
+  sets = sets.slice(0, PRINT_SUGGESTIONS_CAP);
+
+  if (!sets.length) { printSuggestions.hidden = true; printSuggestions.innerHTML = ""; return; }
+  printSuggestions.innerHTML = sets.map((p) => `
+    <li data-set-code="${p.set_code}">
+      <strong>${p.set_code}</strong>${p.set_name ? " — " + p.set_name : ""}${p.region ? " [" + p.region + "]" : ""}
+    </li>
+  `).join("");
+  printSuggestions.hidden = false;
+}
+
+printSuggestions.addEventListener("click", (e) => {
+  const li = e.target.closest("li[data-set-code]");
+  if (!li) return;
+  const code = li.dataset.setCode;
+  printSearch.value = code;
+  renderSetOptions(code);
+  setSelect.value = code;
+  onSetChange();
+  printSuggestions.hidden = true;
+  printSuggestions.innerHTML = "";
+});
+// `mousedown` (não `click`) dispararia antes do `blur` do campo, mas o
+// clique na sugestão já teria a lista escondida a essa altura — por isso o
+// `blur` espera um instante antes de esconder, dando tempo do `click` acima
+// rodar primeiro (achado real: sem o atraso, o clique numa sugestão nunca
+// registrava, porque a lista já tinha desaparecido).
+printSearch.addEventListener("blur", () => {
+  setTimeout(() => { printSuggestions.hidden = true; }, 150);
+});
+printSearch.addEventListener("focus", () => renderPrintSuggestions(printSearch.value));
+
+// Copiar o código lido pelo OCR para o campo de busca de Set (pedido do
+// usuário) — atalho manual para quando a detecção automática por código
+// (`codePrintsForCard`, em `selectCard`) não resolve sozinha. O código lido
+// costuma vir como "SETCODE-numero" (ex.: "LOB-089"); só o prefixo do set
+// interessa como ponto de partida da busca, o número por si não bate com
+// `set_code` no catálogo.
+copyOcrCodeButton.addEventListener("click", () => {
+  const raw = (current() && current().ocr_code_raw) || "";
+  if (!raw) return;
+  const setPrefix = raw.split(/[-\s]/)[0].toUpperCase();
+  printSearch.value = setPrefix;
+  renderSetOptions(setPrefix);
+  renderPrintSuggestions(setPrefix);
+  printSearch.focus();
+});
+
 // Popula a Raridade com só as raridades do set escolhido. `preferredPrintId`
 // (quando o código lido resolveu para um print específico) força essa
 // seleção mesmo com 2+ raridades catalogadas; sem ele, só auto-seleciona
@@ -334,7 +497,10 @@ function renderRarityOptions(setCode, preferredPrintId) {
 let printSearchTimer = null;
 printSearch.addEventListener("input", () => {
   clearTimeout(printSearchTimer);
-  printSearchTimer = setTimeout(() => renderSetOptions(printSearch.value), 200);
+  printSearchTimer = setTimeout(() => {
+    renderSetOptions(printSearch.value);
+    renderPrintSuggestions(printSearch.value);
+  }, 200);
 });
 
 function onSetChange() {
@@ -366,6 +532,8 @@ async function selectCard(cardId, candidate) {
   currentPrints = card.prints;
   printSearch.value = "";
   renderSetOptions("");
+  printSuggestions.hidden = true;
+  printSuggestions.innerHTML = "";
   printSection.hidden = false;
 
   // O código lido tem prioridade sobre o nome (mesma regra do motor de
@@ -589,6 +757,13 @@ function advance() {
 document.getElementById("btn-confirm").addEventListener("click", confirmCurrent);
 document.getElementById("btn-skip").addEventListener("click", skipCurrent);
 document.getElementById("btn-reject").addEventListener("click", rejectCurrent);
+
+clearAllReviewsButton.addEventListener("click", async () => {
+  if (!confirm(t("review.confirm_clear_all"))) return;
+  const res = await fetch("/api/v1/scan-results/reject-all", { method: "POST" });
+  if (!res.ok) { showError(t("review.clear_all_failed")); return; }
+  await loadQueue();
+});
 
 document.addEventListener("keydown", (e) => {
   if (body.hidden) return;

@@ -14,7 +14,7 @@ mantém:
 
 from __future__ import annotations
 
-from sqlalchemy import select
+from sqlalchemy import delete, select, update
 from sqlalchemy.orm import Session
 
 from ..db.tables import CollectionItem, ScanImage, ScanJob, ScanResult, utcnow
@@ -27,12 +27,24 @@ class ScanRepository:
 
     # --------------------------------------------------------------------- job
 
-    def create_job(self, folder_path: str, ocr_provider: str, workers: int) -> ScanJob:
+    def create_job(
+        self,
+        folder_path: str,
+        ocr_provider: str,
+        workers: int,
+        *,
+        auto_enabled: bool = True,
+        require_set: bool = True,
+        require_rarity: bool = False,
+    ) -> ScanJob:
         job = ScanJob(
             folder_path=folder_path,
             ocr_provider=ocr_provider,
             workers=workers,
             status="running",
+            auto_enabled=auto_enabled,
+            require_set=require_set,
+            require_rarity=require_rarity,
         )
         self.session.add(job)
         self.session.flush()
@@ -93,6 +105,24 @@ class ScanRepository:
             select(ScanResult).where(ScanResult.job_id == job_id).order_by(ScanResult.id)
         )
         return list(self.session.scalars(stmt))
+
+    def delete_job(self, job: ScanJob) -> None:
+        """Apaga um job e, por cascata de FK (`scan_image`/`scan_result`
+        apontam para `scan_job.id` com `ON DELETE CASCADE`), todas as fotos e
+        leituras associadas a ele. `CollectionItem` não é tocado — o vínculo
+        é só `ScanResult.collection_item_id`, e é a `CollectionItem` que
+        aponta pra fora (`ON DELETE SET NULL`), nunca o contrário; limpar
+        histórico de scan nunca remove carta já somada à coleção."""
+        self.session.delete(job)
+
+    def clear_all_jobs(self) -> int:
+        """Apaga TODOS os jobs de scan (pedido do usuário: "limpar tudo").
+        Mesma garantia acima sobre a coleção, e mesmo motivo de usar `DELETE`
+        em massa em vez de um loop (`CollectionRepository.clear_all`)."""
+        count = len(self.session.scalars(select(ScanJob.id)).all())
+        self.session.execute(delete(ScanJob))
+        self.session.flush()
+        return count
 
     def recent_jobs(self, limit: int = 10) -> list[ScanJob]:
         # `id` como desempate: dois jobs criados na mesma janela de resolução
@@ -300,3 +330,24 @@ class ScanRepository:
                 .where(ScanResult.applied.is_(False))
             ).all()
         )
+
+    def reject_all_pending(self) -> int:
+        """Rejeita TODA a fila de revisão de uma vez (pedido do usuário:
+        "limpar todas as revisões"). Mesma semântica de `mark_decided` por
+        item (nunca toca a coleção, `ScanImage` continua marcada como
+        vista), só que em massa — `UPDATE` direto em vez de um loop, mesmo
+        motivo de `ScanRepository.clear_all_jobs`."""
+        ids = self.session.scalars(
+            select(ScanResult.id)
+            .where(ScanResult.decision.in_(self._REVIEWABLE_DECISIONS))
+            .where(ScanResult.applied.is_(False))
+        ).all()
+        if not ids:
+            return 0
+        self.session.execute(
+            update(ScanResult)
+            .where(ScanResult.id.in_(ids))
+            .values(decision="rejected", decided_at=utcnow())
+        )
+        self.session.flush()
+        return len(ids)

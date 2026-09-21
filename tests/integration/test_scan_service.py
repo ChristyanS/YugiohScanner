@@ -709,6 +709,37 @@ class TestReview:
         with pytest.raises(ScanResultNotFoundError):
             service(catalog, settings).reject_result(999999)
 
+    def test_reject_all_pending_clears_the_whole_queue(
+        self, catalog: Database, settings: Settings, cards_folder: Path
+    ) -> None:
+        scan(catalog, settings, cards_folder, no_auto=True)
+        svc = service(catalog, settings)
+        assert len(svc.pending_results()) == 4
+
+        removed = svc.reject_all_pending()
+
+        assert removed == 4
+        assert svc.pending_results() == []
+        assert snapshot(catalog) == []
+
+    def test_reject_all_pending_does_not_touch_already_confirmed(
+        self, catalog: Database, settings: Settings, cards_folder: Path
+    ) -> None:
+        scan(catalog, settings, cards_folder, no_auto=True)
+        svc = service(catalog, settings)
+        confirmed = svc.pending_results()[0]
+        svc.confirm_result(confirmed.id, card_id=BLUE_EYES, card_print_id=None)
+
+        removed = svc.reject_all_pending()
+
+        assert removed == 3
+        assert snapshot(catalog) == [(BLUE_EYES, None, 1)]
+
+    def test_reject_all_pending_on_empty_queue_returns_zero(
+        self, catalog: Database, settings: Settings
+    ) -> None:
+        assert service(catalog, settings).reject_all_pending() == 0
+
     def test_confirming_a_different_card_than_the_reading_works(
         self, catalog: Database, settings: Settings, cards_folder: Path
     ) -> None:
@@ -754,6 +785,50 @@ class TestReview:
             blue_eyes_result.id, card_id=BLUE_EYES, card_print_id=None, language="DE"
         )
         assert item.language == "DE"
+
+    def test_confirm_with_a_malformed_language_falls_back_instead_of_crashing(
+        self, catalog: Database, settings: Settings, cards_folder: Path
+    ) -> None:
+        """Achado real (Scan #11): um `detected_language` corrompido (1 letra,
+        ex. "P" de um "PT" que o OCR comeu) faz `PrintOverrideRepository.set`
+        estourar `IntegrityError` (CHECK exige 2-3 letras) dentro do `flush()`
+        de `mark_applied` — desfazendo a confirmação inteira sem erro visível
+        na tela, deixando a leitura presa em `pending` para sempre. O mesmo
+        vale para um `language` explícito malformado vindo da API. Cair para
+        `DEFAULT_LANGUAGE` é melhor que travar a revisão inteira."""
+        scan(catalog, settings, cards_folder, no_auto=True)
+        svc = service(catalog, settings)
+        target = svc.pending_results()[0]
+
+        item = svc.confirm_result(target.id, card_id=BLUE_EYES, card_print_id=None, language="P")
+        assert item.language == "EN"
+
+    def test_confirm_falls_back_to_the_chosen_print_region_when_detection_failed(
+        self, catalog: Database, settings: Settings, cards_folder: Path
+    ) -> None:
+        """Achado real do usuário: o OCR trocou "PT011" por "1T011" (P→1,
+        `domain/setcode.py`) e `detected_language` ficou `None`, mas a
+        revisão ainda assim escolheu manualmente o print certo — que já é
+        regional (`card_print.region="PT"`). Sem cair para a região do print
+        escolhido, a cópia entrava com `language="EN"` (`DEFAULT_LANGUAGE`)
+        e virava uma segunda linha na coleção em vez de somar na cópia já
+        existente do mesmo `card_print_id`."""
+        scan(catalog, settings, cards_folder, no_auto=True)
+        svc = service(catalog, settings)
+        garbage_result = next(r for r in svc.pending_results() if r.card_id is None)
+        assert garbage_result.detected_language is None
+
+        with catalog.session() as session:
+            sdk_print = session.scalar(
+                select(CardPrint).where(CardPrint.set_code_full == "SDK-001")
+            )
+            assert sdk_print is not None
+            sdk_print.region = "PT"
+            print_id = sdk_print.id
+            session.commit()
+
+        item = svc.confirm_result(garbage_result.id, card_id=DARK_MAGICIAN, card_print_id=print_id)
+        assert item.language == "PT"
 
     def test_confirm_with_explicit_print_and_language_records_an_override(
         self, catalog: Database, settings: Settings, cards_folder: Path
@@ -838,6 +913,40 @@ class TestJobIntrospection:
 
         with pytest.raises(JobNotFoundError):
             service(catalog, settings).job_detail(999999)
+
+    def test_job_persists_the_explicit_scan_policy(
+        self, catalog: Database, settings: Settings, cards_folder: Path
+    ) -> None:
+        """A tela de detalhe do scan (pedido do usuário) explica por que
+        `auto_added` varia entre execuções mostrando a política que valeu
+        para *aquele* job — precisa estar gravada, não inferida do
+        `Settings` atual (que pode já ter mudado)."""
+        report = scan(
+            catalog,
+            settings,
+            cards_folder,
+            no_auto=True,
+            require_set=True,
+            require_rarity=True,
+        )
+        job = service(catalog, settings).job_detail(report.job_id)
+        assert job.auto_enabled is False
+        assert job.require_set is True
+        assert job.require_rarity is True
+
+    def test_job_falls_back_to_settings_default_when_policy_is_omitted(
+        self, catalog: Database, settings: Settings, cards_folder: Path
+    ) -> None:
+        # Sem o helper `scan()` deste arquivo (que fixa `require_set=False`
+        # de propósito para os outros testes) — aqui o que importa é o
+        # `None` sem override nenhum resolvendo para o default do `Settings`.
+        report = service(catalog, settings).scan(
+            cards_folder, provider_name="fake", workers=1
+        )
+        job = service(catalog, settings).job_detail(report.job_id)
+        assert job.auto_enabled is True
+        assert job.require_set == settings.auto_requires_print
+        assert job.require_rarity == settings.auto_requires_rarity
 
 
 class _FallbackOCRProvider:

@@ -9,7 +9,7 @@ import pytest
 from sqlalchemy.orm import Session
 
 from yugioh_scanner.db.tables import Card, CollectionItem
-from yugioh_scanner.errors import DeckValidationError
+from yugioh_scanner.errors import DeckNotFoundError, DeckValidationError
 from yugioh_scanner.services.deck_service import DeckService
 
 NORMAL_CARD = 1
@@ -213,3 +213,32 @@ class TestRemoveCard:
         service.add_card(deck.id, NORMAL_CARD, "main", quantity=3)
         service.remove_card(deck.id, NORMAL_CARD, "main")
         assert service.repo.total_copies_in_deck(deck.id, NORMAL_CARD) == 0
+
+
+class TestDeckCrud:
+    def test_delete_deck_removes_its_cards(self, service: DeckService) -> None:
+        deck = service.create_deck("D1")
+        service.add_card(deck.id, NORMAL_CARD, "main", quantity=3)
+
+        service.delete_deck(deck.id)
+        service.session.flush()
+
+        with pytest.raises(DeckNotFoundError):
+            service.get_deck(deck.id)
+
+    def test_clear_all_decks_removes_every_deck(self, service: DeckService) -> None:
+        d1 = service.create_deck("D1")
+        d2 = service.create_deck("D2")
+        service.add_card(d1.id, NORMAL_CARD, "main", quantity=2)
+
+        removed = service.clear_all_decks()
+
+        assert removed == 2
+        assert service.list_decks() == []
+        with pytest.raises(DeckNotFoundError):
+            service.get_deck(d1.id)
+        with pytest.raises(DeckNotFoundError):
+            service.get_deck(d2.id)
+
+    def test_clear_all_decks_on_empty_list_returns_zero(self, service: DeckService) -> None:
+        assert service.clear_all_decks() == 0
