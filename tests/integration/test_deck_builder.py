@@ -137,6 +137,34 @@ class TestDeckValidateAndSearch:
         res2 = client.get(f"/api/v1/decks/{deck_id}/search?q=dark")
         assert any(c["id"] == DARK_MAGICIAN for c in res2.json())
 
+    def test_search_collection_only_paginates_past_a_multi_print_card(
+        self, client: TestClient
+    ) -> None:
+        """Regressão real do usuário: uma carta com 2+ entradas na coleção
+        (aqui, dois idiomas) não pode fazer o Deck Builder achar que a busca
+        "Somente Coleção" chegou ao fim antes de mostrar as outras cartas
+        possuídas — bug de paginação por linha em vez de por carta única."""
+        deck_id = client.post(
+            "/api/v1/decks", json={"name": "Deck", "build_mode": "collection_only"}
+        ).json()["id"]
+        # "Blue-Eyes White Dragon" ordena primeiro e ganha 2 linhas (idiomas
+        # diferentes); "Dark Magician" e "Ojama Token" seguem, uma linha cada.
+        client.post(
+            "/api/v1/collection", json={"name": "Blue-Eyes White Dragon", "quantity": 1}
+        )
+        client.post(
+            "/api/v1/collection",
+            json={"name": "Blue-Eyes White Dragon", "quantity": 1, "language": "JP"},
+        )
+        client.post("/api/v1/collection", json={"name": "Dark Magician", "quantity": 1})
+        client.post("/api/v1/collection", json={"name": "Ojama Token", "quantity": 1})
+
+        first_page = client.get(f"/api/v1/decks/{deck_id}/search?limit=2&offset=0").json()
+        assert [c["name"] for c in first_page] == ["Blue-Eyes White Dragon", "Dark Magician"]
+
+        second_page = client.get(f"/api/v1/decks/{deck_id}/search?limit=2&offset=2").json()
+        assert [c["name"] for c in second_page] == ["Ojama Token"]
+
     def test_search_offset_paginates(self, client: TestClient) -> None:
         """Painel de navegação do Deck Builder (grid 6x5) pagina com
         `offset` — `DeckService.searchable_pool` já aceitava o parâmetro,

@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from yugioh_scanner.db.tables import Card, CollectionItem
 from yugioh_scanner.errors import DeckNotFoundError, DeckValidationError
+from yugioh_scanner.repositories.collection import CollectionKey
 from yugioh_scanner.services.deck_service import DeckService
 
 NORMAL_CARD = 1
@@ -184,6 +185,46 @@ class TestCollectionOnlyMode:
         # nenhuma CollectionItem cadastrada — mesmo assim aceita até o limite padrão
         service.add_card(deck.id, NORMAL_CARD, "main", quantity=3)
         assert service.repo.total_copies_in_deck(deck.id, NORMAL_CARD) == 3
+
+
+class TestSearchablePoolCollectionOnly:
+    """Regressão real do usuário: no modo "Somente Coleção", cartas depois de
+    uma carta com 2+ linhas de `CollectionItem` (prints/idiomas diferentes)
+    somem da busca do Deck Builder — `searchable_pool` paginava no nível de
+    linha, e o dedupe para carta única acontecia só depois, encolhendo a
+    página sem a coleção estar de fato esgotada."""
+
+    def test_pagination_survives_a_multi_row_card_at_the_page_boundary(
+        self, service: DeckService
+    ) -> None:
+        deck = service.create_deck("D1", build_mode="collection_only")
+        # FUSION_CARD ("Fusion Monster") ordena primeiro e tem 2 linhas
+        # (idiomas diferentes) — exatamente o cenário que quebrava a
+        # paginação por linha.
+        service.collection_repo.add_copies(CollectionKey(card_id=FUSION_CARD), 1)
+        service.collection_repo.add_copies(CollectionKey(card_id=FUSION_CARD, language="JP"), 1)
+        service.collection_repo.add_copies(CollectionKey(card_id=LIMITED_CARD), 1)
+        service.collection_repo.add_copies(CollectionKey(card_id=NORMAL_CARD), 1)
+
+        first_page = service.searchable_pool(deck, None, limit=2, offset=0)
+        assert [c.id for c in first_page] == [FUSION_CARD, LIMITED_CARD]
+
+        second_page = service.searchable_pool(deck, None, limit=2, offset=2)
+        assert [c.id for c in second_page] == [NORMAL_CARD]
+
+    def test_short_page_only_when_truly_exhausted(self, service: DeckService) -> None:
+        deck = service.create_deck("D1", build_mode="collection_only")
+        service.collection_repo.add_copies(CollectionKey(card_id=FUSION_CARD), 1)
+        service.collection_repo.add_copies(CollectionKey(card_id=FUSION_CARD, language="JP"), 1)
+        service.collection_repo.add_copies(CollectionKey(card_id=LIMITED_CARD), 1)
+
+        # limit=2 cruza exatamente a carta duplicada — a página não pode vir
+        # curta aqui, só na próxima, que de fato esgota a coleção.
+        page = service.searchable_pool(deck, None, limit=2, offset=0)
+        assert len(page) == 2
+
+        exhausted = service.searchable_pool(deck, None, limit=2, offset=2)
+        assert exhausted == []
 
 
 class TestValidateDeck:

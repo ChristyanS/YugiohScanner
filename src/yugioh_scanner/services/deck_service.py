@@ -201,14 +201,24 @@ class DeckService:
         usuário, ou o catálogo inteiro — reaproveita a busca já existente em
         cada caso, não duplica lógica de busca."""
         if deck.build_mode == "collection_only":
-            items = self.collection_repo.list_filtered(search=query, limit=limit, offset=offset)
+            # `limit`/`offset` aqui contam CARTAS únicas, não linhas de
+            # `CollectionItem` — uma carta com 2+ linhas (prints/condições/
+            # idiomas diferentes) fazia o corte de linha (LIMIT/OFFSET no
+            # nível de `list_filtered`) cair no meio de uma carta e devolver
+            # menos cartas únicas que `limit` sem a coleção estar de fato
+            # esgotada, e o Deck Builder lia isso como "não há mais páginas"
+            # (achado real do usuário: cartas da coleção somem da busca).
+            # Por isso busca TODAS as linhas que casam o filtro (sem
+            # limit/offset — mesmo padrão de `ExportService.build_rows`),
+            # dedupe para cartas únicas, e só então corta a página.
+            items = self.collection_repo.list_filtered(search=query)
             seen: set[int] = set()
             cards: list[Card] = []
             for item in items:
                 if item.card_id not in seen:
                     seen.add(item.card_id)
                     cards.append(item.card)
-            return cards
+            return cards[offset : offset + limit]
         return self.catalog.search_cards(query, limit=limit, offset=offset)
 
     def remaining_copies(self, deck: Deck, card: Card) -> int:
