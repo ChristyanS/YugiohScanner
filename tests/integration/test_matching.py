@@ -537,3 +537,43 @@ class TestResolverLanguageFallback:
     def test_unrecognized_code_has_no_detected_region(self, session: Session) -> None:
         resolution = PrintResolver(session).resolve("not a set code")
         assert resolution.detected_region is None
+
+    def test_unvalidated_single_letter_region_is_not_trusted(self, session: Session) -> None:
+        """Achado real (Scan #11): o OCR troca "T" por "1" dentro de uma
+        região de 2 letras (`SR06-PT002` -> `SR06-P1002`), e "P1002" bate na
+        mesma regra de região de 1 letra (`domain/setcode.py::_split_region`)
+        que reconhece prints europeus antigos de verdade (`PSV-E088`). Sem
+        confirmação do catálogo, "P" não pode virar `detected_region` — isso
+        gravava `ScanResult.detected_language="P"` e travava a confirmação
+        da revisão (CHECK de `card_print_override` exige 2-3 letras)."""
+        resolution = PrintResolver(session).resolve("SR06-P1002")
+        assert resolution.detected_region is None
+        assert resolution.matched_code is None
+
+    def test_single_letter_region_is_trusted_once_validated(self, session: Session) -> None:
+        """O mesmo tipo de região de 1 letra, quando o código bate de
+        verdade no catálogo (`PSV-E088`, print europeu antigo real), continua
+        confiável — a guarda acima só se aplica a códigos não validados."""
+        from yugioh_scanner.db.tables import Card, CardPrint, CardSet
+
+        session.add(CardSet(set_code="PSV", set_name="Pharaoh's Servant"))
+        session.add(
+            Card(id=3, name="Y", name_normalized="y", type="Effect Monster", desc="")
+        )
+        session.add(
+            CardPrint(
+                card_id=3,
+                set_code_full="PSV-E088",
+                set_code_normalized="PSV-E088",
+                set_prefix="PSV",
+                set_name="Pharaoh's Servant",
+                region="E",
+                number="088",
+                rarity="Common",
+            )
+        )
+        session.flush()
+
+        resolution = PrintResolver(session).resolve("PSV-E088")
+        assert resolution.detected_region == "E"
+        assert resolution.matched_code == "PSV-E088"

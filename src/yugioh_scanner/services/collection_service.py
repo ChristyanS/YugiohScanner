@@ -211,6 +211,10 @@ class CollectionService:
     def remove(self, item_id: int, quantity: int | None = None) -> int:
         return self.repo.remove_copies(item_id, quantity)
 
+    def clear_all(self) -> int:
+        """Apaga a coleção inteira — ação de "limpar tudo" (irreversível)."""
+        return self.repo.clear_all()
+
     def set_quantity(self, item_id: int, quantity: int) -> int:
         return self.repo.set_quantity(item_id, quantity)
 

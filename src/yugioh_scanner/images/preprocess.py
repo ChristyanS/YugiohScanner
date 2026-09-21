@@ -89,6 +89,20 @@ NAME_ROI = BoundingBox(0.04, 0.025, 0.82, 0.115)
 #: deixaria a suíte "passando" contra um layout que carta nenhuma tem.
 CODE_ROI = BoundingBox(0.42, 0.665, 0.98, 0.76)
 
+#: Variante de `CODE_ROI` para o caminho de grade, quando a célula já passou
+#: por `images/grid.py::locate_and_deskew_card` antes de chegar aqui — achado
+#: real desta sessão (`tests/fixtures/grid_scans/`, medido em 5 cartas): o
+#: recorte endireitado tem margem quase zero (ao contrário do
+#: `detect_card_bounds` de cima, mais folgado), então a mesma fração de altura
+#: cai em lugar diferente. A arte termina entre 71%-74% da altura — bem abaixo
+#: do topo de 0.665 acima, que por isso capturava um bocado de arte de alto
+#: contraste como ruído antes do código de verdade. O código fica entre
+#: ~73%-76%, colado na borda da caixa de tipo ("[GUERREIRO]" etc., que só
+#: começa a partir de ~77%-79%) — por isso o topo sobe (corta a arte) e a base
+#: sobe só o suficiente para caber o código inteiro sem invadir o texto de
+#: tipo.
+CODE_ROI_GRID = BoundingBox(0.40, 0.70, 0.98, 0.775)
+
 #: Faixa do passcode ("Card ID") — canto inferior-esquerdo, rente à borda
 #: física da carta (mesma linha do copyright "©2020 Studio Dice/...", bem
 #: abaixo da caixa de texto/efeito — **não** a mesma altura do set code,
@@ -260,6 +274,7 @@ def prepare_regions(
     region: BoundingBox | None = None,
     auto_crop: bool = True,
     max_dimension: int = MAX_DIMENSION,
+    code_roi: BoundingBox = CODE_ROI,
 ) -> PreparedImage:
     """Pipeline completo a partir de uma imagem já carregada.
 
@@ -269,6 +284,12 @@ def prepare_regions(
     fecha `image`: quem chama pode ser dono dela (ex.: uma foto com várias
     células, preparada uma vez e recortada N vezes) — só os intermediários
     criados aqui são fechados.
+
+    `code_roi` é injetável porque a proporção certa depende de como `image`
+    já chegou: uma célula de grade endireitada por
+    `images/grid.py::locate_and_deskew_card` tem margem quase zero, diferente
+    da foto de carta única — ver `CODE_ROI_GRID`. O padrão (`CODE_ROI`)
+    mantém o comportamento de sempre para quem não passa nada.
     """
     notes: dict[str, Any] = {"original_size": list(image.size)}
     to_close: list[Image.Image] = []
@@ -295,7 +316,7 @@ def prepare_regions(
 
         width, height = working.size
         name_crop = working.crop(NAME_ROI.to_pixels(width, height))
-        code_crop = working.crop(CODE_ROI.to_pixels(width, height))
+        code_crop = working.crop(code_roi.to_pixels(width, height))
         passcode_crop = working.crop(PASSCODE_ROI.to_pixels(width, height))
 
         regions = {

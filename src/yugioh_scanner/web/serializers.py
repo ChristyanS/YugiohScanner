@@ -19,18 +19,33 @@ from ..domain.passcode import clean_passcode
 
 
 def job_to_dict(job: ScanJob) -> dict[str, Any]:
+    # Cartas de verdade (recortes resolvidos: auto + pendente + falha), não
+    # fotos processadas — numa foto de grade (ADR 0011) uma imagem rende N
+    # destes. Achado real do usuário: Scan #1 mostrava "61 processadas" mas
+    # o total de cartas era maior, porque `processed` conta fotos, não
+    # recortes.
+    total_cards = job.auto_added + job.pending + job.failed
     return {
         "id": job.id,
         "folder_path": job.folder_path,
         "status": job.status,
         "ocr_provider": job.ocr_provider,
         "workers": job.workers,
+        # Política efetiva desta execução, congelada em `ScanJob` — ver
+        # comentário em `db/tables.py::ScanJob.auto_enabled`.
+        "auto_enabled": job.auto_enabled,
+        "require_set": job.require_set,
+        "require_rarity": job.require_rarity,
         "total_images": job.total_images,
         "processed": job.processed,
         "skipped": job.skipped,
         "auto_added": job.auto_added,
         "pending": job.pending,
         "failed": job.failed,
+        "total_cards": total_cards,
+        "pct_auto": round(job.auto_added / total_cards * 100) if total_cards else None,
+        "pct_pending": round(job.pending / total_cards * 100) if total_cards else None,
+        "pct_failed": round(job.failed / total_cards * 100) if total_cards else None,
         "started_at": job.started_at.isoformat(),
         "finished_at": job.finished_at.isoformat() if job.finished_at else None,
         "error": job.error,
@@ -65,6 +80,11 @@ def result_to_dict(result: ScanResult, *, with_image: bool = True) -> dict[str, 
         # pré-selecionar o set no seletor em cascata mesmo quando
         # `card_print_id` ficou `None` por ambiguidade de raridade.
         "matched_set_code": result.matched_set_code,
+        # Set/raridade resolvidos de verdade no catálogo (via `card_print_id`),
+        # não o texto bruto do OCR — o comparador visual da tela de detalhe
+        # do scan (`ScanService._attach_print_info`).
+        "resolved_set_code": result.resolved_set_code,
+        "resolved_rarity": result.resolved_rarity,
         "name_score": round(result.name_score, 4),
         "code_score": round(result.code_score, 4),
         "confidence": round(result.confidence, 4),

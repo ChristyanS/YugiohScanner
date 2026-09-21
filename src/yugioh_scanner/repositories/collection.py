@@ -16,7 +16,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, ClassVar
 
-from sqlalchemy import and_, exists, func, or_, select
+from sqlalchemy import and_, delete, exists, func, or_, select
 from sqlalchemy.orm import Session
 
 from ..db.tables import (
@@ -201,6 +201,19 @@ class CollectionRepository:
         item.updated_at = utcnow()
         self.session.flush()
         return quantity
+
+    def clear_all(self) -> int:
+        """Apaga TODOS os itens da coleção (pedido do usuário: "limpar por
+        completo"). `ScanResult.collection_item_id` aponta para cá com
+        `ON DELETE SET NULL` (plano §13) — o histórico de scans sobrevive,
+        só perde o vínculo com um item de coleção que deixou de existir.
+        `DELETE` em massa (não um loop de `session.delete`): a coleção pode
+        ter milhares de linhas, e nenhuma delas precisa de lógica Python por
+        item para ser removida."""
+        count = self.count_items()
+        self.session.execute(delete(CollectionItem))
+        self.session.flush()
+        return count
 
     def set_notes(self, item_id: int, notes: str | None) -> CollectionItem:
         """Substitui a anotação livre (Fase 8: `PATCH /api/v1/collection/{id}`)."""

@@ -35,24 +35,27 @@
 <figure>
 <table>
   <thead>
-    <tr><th>{{ t('dashboard.table_id') }}</th><th>{{ t('dashboard.table_folder') }}</th><th>{{ t('dashboard.table_status') }}</th><th>{{ t('dashboard.table_processed') }}</th><th>{{ t('dashboard.table_auto') }}</th><th>{{ t('dashboard.table_pending') }}</th><th>{{ t('dashboard.table_failed') }}</th><th>{{ t('dashboard.table_started') }}</th></tr>
+    <tr><th>{{ t('dashboard.table_id') }}</th><th>{{ t('dashboard.table_folder') }}</th><th>{{ t('dashboard.table_status') }}</th><th>{{ t('dashboard.table_processed') }}</th><th>{{ t('dashboard.table_cards') }}</th><th>{{ t('dashboard.table_auto') }}</th><th>{{ t('dashboard.table_pending') }}</th><th>{{ t('dashboard.table_failed') }}</th><th>{{ t('dashboard.table_started') }}</th><th></th></tr>
   </thead>
-  <tbody>
+  <tbody id="recent-scans-body">
     {% for job in jobs %}
-    <tr>
+    <tr id="scan-row-{{ job.id }}">
       <td><a href="/scan/{{ job.id }}">#{{ job.id }}</a></td>
       <td>{{ job.folder_path }}</td>
       <td>{{ job.status }}</td>
       <td>{{ job.processed }}</td>
+      <td>{{ job.total_cards }}</td>
       <td>{{ job.auto_added }}</td>
       <td>{{ job.pending }}</td>
       <td>{{ job.failed }}</td>
       <td>{{ job.started_at[:16] }}</td>
+      <td><button type="button" class="contrast outline" data-delete-scan="{{ job.id }}">{{ t('dashboard.delete_scan_button') }}</button></td>
     </tr>
     {% endfor %}
   </tbody>
 </table>
 </figure>
+<button type="button" id="clear-all-scans-button" class="contrast outline">{{ t('dashboard.clear_all_scans_button') }}</button>
 {% else %}
 <p><em>{{ t('dashboard.no_scans') }} <a href="/scan">{{ t('dashboard.start_here') }}</a>.</em></p>
 {% endif %}
@@ -78,4 +81,24 @@
 {% else %}
 <p><em>{{ t('dashboard.empty_collection') }}</em></p>
 {% endif %}
+
+<script>
+document.querySelectorAll("[data-delete-scan]").forEach((btn) => {
+  btn.addEventListener("click", async () => {
+    const jobId = btn.dataset.deleteScan;
+    if (!confirm(t("dashboard.confirm_delete_scan", { id: jobId }))) return;
+    const res = await fetch(`/api/v1/scans/${jobId}`, { method: "DELETE" });
+    if (res.ok) document.getElementById(`scan-row-${jobId}`).remove();
+  });
+});
+
+const clearAllScansButton = document.getElementById("clear-all-scans-button");
+if (clearAllScansButton) {
+  clearAllScansButton.addEventListener("click", async () => {
+    if (!confirm(t("dashboard.confirm_clear_all_scans"))) return;
+    const res = await fetch("/api/v1/scans", { method: "DELETE" });
+    if (res.ok) window.location.reload();
+  });
+}
+</script>
 {% endblock %}

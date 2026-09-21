@@ -7,6 +7,10 @@
       <span class="gallery-qty">x{{ item.quantity }}</span>
     </div>
     <span class="gallery-caption">{{ display_name }}</span>
+    <span class="gallery-print-info">
+      {{ item.set_code_full_display or t('collection.set_undefined_link') }}
+      {% if item.rarity_display %} &middot; {{ item.rarity_display }}{% endif %}
+    </span>
   </a>
   {% else %}
   <p><em>{{ t('common.no_items_match') }}</em></p>

@@ -170,6 +170,12 @@ function makeSlot(cardId, zone, card) {
   slot.draggable = true;
   slot.innerHTML = `<img src="/api/v1/cards/${cardId}/image?size=small" loading="lazy" alt="">${banBadgeHtml(card)}`;
   slot.addEventListener("click", () => selectDetail(cardId));
+  // Botão direito numa carta já no deck remove 1 cópia daquela zona (pedido
+  // do usuário) — não abre o menu de contexto do navegador.
+  slot.addEventListener("contextmenu", (e) => {
+    e.preventDefault();
+    removeCard(cardId, zone, 1);
+  });
   slot.addEventListener("dragstart", (e) => {
     e.dataTransfer.setData("application/json", JSON.stringify({ cardId, originZone: zone }));
     e.dataTransfer.effectAllowed = "move";
@@ -285,6 +291,26 @@ wireDropTarget(poolGrid, async (payload) => {
   }
 });
 
+// Mesma lista de `DeckService.EXTRA_DECK_FRAME_TYPES` (deck_service.py) —
+// só para decidir o destino padrão do clique na busca; a validação de
+// verdade continua no servidor (`addCard` mostra erro se o palpite for
+// inválido, ex.: uma carta de Extra Deck detectada como "main" por engano).
+const EXTRA_DECK_FRAME_TYPES = new Set([
+  "fusion", "synchro", "xyz", "link", "fusion_pendulum", "synchro_pendulum", "xyz_pendulum",
+]);
+
+function defaultZoneFor(card) {
+  return EXTRA_DECK_FRAME_TYPES.has(card.frame_type) ? "extra" : "main";
+}
+
+// Selo de cópias restantes (modo `collection_only`, plano do Deck Builder
+// §5) — `card.remaining` só vem preenchido pelo servidor nesse modo
+// (`GET /decks/{id}/search`); nos demais casos o campo nem existe.
+function remainingBadgeHtml(card) {
+  if (card.remaining === undefined) return "";
+  return `<span class="remaining-badge" title="${t("deck_editor.remaining_copies_title")}">${card.remaining}</span>`;
+}
+
 function makePoolCard(card) {
   const wrap = document.createElement("div");
   wrap.className = "deck-pool-card";
@@ -292,23 +318,25 @@ function makePoolCard(card) {
     <div class="deck-slot">
       <img src="/api/v1/cards/${card.id}/image?size=small" loading="lazy" alt="">
       ${banBadgeHtml(card)}
-    </div>
-    <div class="deck-pool-add-row">
-      <button type="button" data-zone="main">${t("deck_editor.add_zone_main")}</button>
-      <button type="button" data-zone="side">${t("deck_editor.add_zone_side")}</button>
-      <button type="button" data-zone="extra">${t("deck_editor.add_zone_extra")}</button>
+      ${remainingBadgeHtml(card)}
     </div>
   `;
   const slot = wrap.querySelector(".deck-slot");
   slot.draggable = true;
-  slot.addEventListener("click", () => selectDetail(card.id));
   slot.addEventListener("dragstart", (e) => {
     e.dataTransfer.setData("application/json", JSON.stringify({ cardId: card.id, originZone: "pool" }));
     e.dataTransfer.effectAllowed = "move";
   });
-  wrap.querySelectorAll("button[data-zone]").forEach((btn) => {
-    btn.addEventListener("click", () => addCard(card.id, btn.dataset.zone));
-  });
+  // Clique (esquerdo ou direito) na área de busca adiciona a carta direto ao
+  // Main/Extra Deck conforme o tipo — Ctrl+clique força o Side Deck (pedido
+  // do usuário). Substitui o antigo "clique abre o detalhe" desta lista; o
+  // detalhe continua disponível ao clicar numa carta já dentro do deck.
+  const addFromPool = (e) => {
+    e.preventDefault();
+    addCard(card.id, e.ctrlKey ? "side" : defaultZoneFor(card));
+  };
+  slot.addEventListener("click", addFromPool);
+  slot.addEventListener("contextmenu", addFromPool);
   return wrap;
 }
 

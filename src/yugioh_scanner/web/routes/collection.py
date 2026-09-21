@@ -203,3 +203,19 @@ def print_options(
 def delete_item(item_id: int, collection: CollectionServiceDep) -> HTMLResponse:
     collection.remove(item_id)
     return HTMLResponse("")
+
+
+@router.delete("", response_class=HTMLResponse)
+def clear_collection(
+    request: Request,
+    collection: CollectionServiceDep,
+    settings: SettingsServiceDep,
+) -> HTMLResponse:
+    collection.clear_all()
+    filters = _filters(request, default_lang=settings.get_default_card_language())
+    templates = request.app.state.templates
+    return templates.TemplateResponse(
+        request,
+        "partials/collection_results.html",
+        {"items": [], "display_names": {}, "filters": filters},
+    )

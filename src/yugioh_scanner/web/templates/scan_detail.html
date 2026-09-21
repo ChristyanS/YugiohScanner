@@ -2,39 +2,76 @@
 {% block title %}Scan #{{ job.id }} — Yu-Gi-Oh! Scanner{% endblock %}
 {% block content %}
 <h1>Scan #{{ job.id }}</h1>
-<p><a href="/scan">{{ t('scan_detail.back_link') }}</a></p>
+<p>
+  <a href="/scan">{{ t('scan_detail.back_link') }}</a>
+  &middot;
+  <button type="button" id="delete-scan-button" class="contrast outline">{{ t('scan_detail.delete_button') }}</button>
+</p>
 
 <div class="metric-grid">
+  <article class="metric-card"><span class="value">{{ job.total_cards }}</span><span class="label">{{ t('scan_detail.metric_total_cards') }}</span></article>
   <article class="metric-card"><span class="value">{{ job.processed }}</span><span class="label">{{ t('scan_detail.metric_processed') }}</span></article>
-  <article class="metric-card"><span class="value">{{ job.auto_added }}</span><span class="label">{{ t('scan_detail.metric_auto') }}</span></article>
-  <article class="metric-card"><span class="value">{{ job.pending }}</span><span class="label">{{ t('scan_detail.metric_pending') }}</span></article>
-  <article class="metric-card"><span class="value">{{ job.failed }}</span><span class="label">{{ t('scan_detail.metric_failed') }}</span></article>
+  <article class="metric-card"><span class="value">{{ job.auto_added }}{% if job.pct_auto is not none %} <small>({{ job.pct_auto }}%)</small>{% endif %}</span><span class="label">{{ t('scan_detail.metric_auto') }}</span></article>
+  <article class="metric-card"><span class="value">{{ job.pending }}{% if job.pct_pending is not none %} <small>({{ job.pct_pending }}%)</small>{% endif %}</span><span class="label">{{ t('scan_detail.metric_pending') }}</span></article>
+  <article class="metric-card"><span class="value">{{ job.failed }}{% if job.pct_failed is not none %} <small>({{ job.pct_failed }}%)</small>{% endif %}</span><span class="label">{{ t('scan_detail.metric_failed') }}</span></article>
   <article class="metric-card"><span class="value">{{ job.skipped }}</span><span class="label">{{ t('scan_detail.metric_skipped') }}</span></article>
 </div>
 
 <p><strong>{{ t('scan_detail.folder_label') }}</strong> {{ job.folder_path }} &middot; <strong>{{ t('scan_detail.provider_label') }}</strong> {{ job.ocr_provider }} &middot; <strong>{{ t('scan_detail.status_label') }}</strong> {{ job.status }}</p>
+<p>
+  <strong>{{ t('scan_detail.type_label') }}</strong>
+  {{ t('scan.auto') }}: {{ t('common.yes') if job.auto_enabled else t('common.no') }} &middot;
+  {{ t('scan.require_set') }}: {{ t('common.yes') if job.require_set else t('common.no') }} &middot;
+  {{ t('scan.require_rarity') }}: {{ t('common.yes') if job.require_rarity else t('common.no') }}
+</p>
 
 <figure>
 <table>
-  <thead><tr><th>{{ t('scan_detail.table_photo') }}</th><th>{{ t('scan_detail.table_ocr_text') }}</th><th>{{ t('scan_detail.table_code') }}</th><th>{{ t('scan_detail.table_crop') }}</th><th>{{ t('scan_detail.table_decision') }}</th><th>{{ t('scan_detail.table_confidence') }}</th><th>{{ t('scan_detail.table_applied') }}</th></tr></thead>
+  <thead><tr><th>{{ t('scan_detail.table_photo') }}</th><th>{{ t('scan_detail.table_ocr_text') }}</th><th>{{ t('scan_detail.table_code') }}</th><th>{{ t('scan_detail.table_passcode') }}</th><th>{{ t('scan_detail.table_resolved') }}</th><th>{{ t('scan_detail.table_crop') }}</th><th>{{ t('scan_detail.table_decision') }}</th><th>{{ t('scan_detail.table_confidence') }}</th><th>{{ t('scan_detail.table_applied') }}</th></tr></thead>
   <tbody>
     {% for r in results %}
     {% set is_group_start = loop.previtem is defined and loop.previtem.scan_image_id != r.scan_image_id %}
     {% set cropped = r.crop_count > 1 and r.source_bbox %}
+    {% set alt_text = r.card_name or r.ocr_name_raw or t('scan_detail.scanned_card_alt') %}
+    {%- if cropped %}
+    {%- set bw = r.source_bbox.right - r.source_bbox.left %}
+    {%- set bh = r.source_bbox.bottom - r.source_bbox.top %}
+    {%- set crop_style = "width: %s%%; height: %s%%; left: %s%%; top: %s%%;"|format(
+        (100 / bw)|round(2), (100 / bh)|round(2),
+        (-100 * r.source_bbox.left / bw)|round(2), (-100 * r.source_bbox.top / bh)|round(2)) %}
+    {%- else %}
+    {%- set crop_style = "" %}
+    {%- endif %}
     <tr{% if is_group_start %} class="group-start"{% endif %}>
       <td>
-        <div class="photo-wrap thumb{% if cropped %} cropped{% endif %}">
-          <img class="roi" loading="lazy" alt="{{ r.card_name or r.ocr_name_raw or t('scan_detail.scanned_card_alt') }}"
-               src="/api/v1/scan-images/{{ r.scan_image_id }}/file"
-               {%- if cropped %}
-               {%- set bw = r.source_bbox.right - r.source_bbox.left %}
-               {%- set bh = r.source_bbox.bottom - r.source_bbox.top %}
-               style="width: {{ (100 / bw)|round(2) }}%; height: {{ (100 / bh)|round(2) }}%; left: {{ (-100 * r.source_bbox.left / bw)|round(2) }}%; top: {{ (-100 * r.source_bbox.top / bh)|round(2) }}%;"
-               {%- endif %}>
+        <!-- Passar o mouse amplia a mesma foto (pedido do usuário) — em foto
+             de grade, `.photo-zoom.cropped` reusa a matemática de recorte do
+             thumbnail, então mostra só a carta desta linha, não a foto
+             inteira. -->
+        <div class="photo-hover">
+          <div class="photo-wrap thumb{% if cropped %} cropped{% endif %}">
+            <img class="roi" loading="lazy" alt="{{ alt_text }}"
+                 src="/api/v1/scan-images/{{ r.scan_image_id }}/file"
+                 {%- if cropped %} style="{{ crop_style }}"{% endif %}>
+          </div>
+          <div class="photo-zoom{% if cropped %} cropped{% endif %}">
+            <img class="roi" loading="lazy" alt="{{ alt_text }}"
+                 src="/api/v1/scan-images/{{ r.scan_image_id }}/file"
+                 {%- if cropped %} style="{{ crop_style }}"{% endif %}>
+          </div>
         </div>
       </td>
       <td>{{ r.ocr_name_raw or "—" }}</td>
       <td>{{ r.ocr_code_raw or "—" }}</td>
+      <td>{{ r.ocr_passcode_raw or "—" }}</td>
+      <td>
+        {% if r.card_name %}
+          {{ r.card_name }}
+          {% if r.resolved_set_code %}<br><small>{{ r.resolved_set_code }}{% if r.resolved_rarity %} — {{ r.resolved_rarity }}{% endif %}</small>{% endif %}
+        {% else %}
+          —
+        {% endif %}
+      </td>
       <td>{{ "%d/%d"|format(r.crop_index + 1, r.crop_count) if r.crop_count > 1 else "—" }}</td>
       <td><span class="badge badge-{{ r.decision }}">{{ r.decision }}</span></td>
       <td>{{ "%.0f"|format(r.confidence * 100) }}%</td>
@@ -47,4 +84,12 @@
 {% if job.pending > 0 %}
 <p><a href="/review" role="button">{{ t('scan_detail.review_pending_link') }}</a></p>
 {% endif %}
+
+<script>
+document.getElementById("delete-scan-button").addEventListener("click", async () => {
+  if (!confirm(t("scan_detail.confirm_delete", { id: {{ job.id }} }))) return;
+  const res = await fetch("/api/v1/scans/{{ job.id }}", { method: "DELETE" });
+  if (res.ok) window.location.href = "/scan";
+});
+</script>
 {% endblock %}

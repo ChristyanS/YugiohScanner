@@ -14,6 +14,7 @@ mesma disciplina de import tardio dos providers de OCR (`ocr/registry.py`).
 from __future__ import annotations
 
 import re
+from typing import Any
 
 from PIL import Image, ImageFilter, ImageStat
 
@@ -63,6 +64,16 @@ _MIN_RECTANGULARITY = 0.75
 #: Contornos cujo bounding rect se sobrepõe (IoU) acima disso são o mesmo
 #: retângulo visto pela borda interna e externa — cv2 sempre acha as duas.
 _DEDUPE_IOU = 0.6
+
+#: Área do retângulo rotacionado da carta relativa à **célula** (já isolada
+#: por `detect_grid_cells`/`manual_grid_cells`), não à foto inteira — por
+#: isso os limiares são bem mais altos que `_MIN_CELL_AREA_RATIO`/
+#: `_MAX_CELL_AREA_RATIO` acima. Medido contra digitalizações reais
+#: (`tests/fixtures/grid_scans/`, achado real desta sessão): 0.81-0.82 nas
+#: células testadas — folga generosa para cima e para baixo porque a carta
+#: tem espaço para deslizar dentro da manga do fichário.
+_CELL_MIN_CARD_AREA_RATIO = 0.5
+_CELL_MAX_CARD_AREA_RATIO = 0.98
 
 
 def detect_grid_cells(
@@ -123,6 +134,122 @@ def detect_grid_cells(
         BoundingBox(x / width, y / height, (x + w) / width, (y + h) / height)
         for x, y, w, h in ordered
     ]
+
+
+def locate_and_deskew_card(cell: Image.Image) -> Image.Image | None:
+    """Acha a carta dentro de uma célula de grade e a endireita.
+
+    **Achado real desta sessão**: dentro de uma célula já recortada por
+    `manual_grid_cells`/`detect_grid_cells`, `detect_card_bounds`
+    (`images/preprocess.py`, heurística Pillow calibrada para foto de carta
+    única sobre mesa lisa) sub-ajusta contra o fundo real de uma página de
+    fichário — costura da manga plástica, carta vizinha, argola do
+    fichário — e devolve quase a célula inteira em vez da borda real da
+    carta. Isso desloca `NAME_ROI`/`CODE_ROI` para cima do texto de verdade,
+    e a folga rotacional da carta dentro da manga (poucos graus, medido
+    -0.3° a -1.3° em 4 células reais) piora ainda mais uma ROI já
+    maldisposta. Esta função resolve as duas coisas de uma vez: acha o
+    retângulo rotacionado de verdade (`cv2.minAreaRect`) e devolve a carta já
+    endireitada e justa, pronta para as ROIs de sempre.
+
+    Best-effort, não pede o extra `cv` explicitamente (ao contrário de
+    `detect_grid_cells`/`ensure_cv_available`): é uma melhoria opcional sobre
+    o caminho de grade, não um modo pedido pelo usuário. Sem `cv2`/`numpy`
+    instalados, ou sem confiança na detecção, devolve `None` — quem chama
+    cai no `detect_card_bounds` de sempre, comportamento inalterado (mesma
+    filosofia de "recortar errado é pior que não recortar").
+    """
+    try:
+        import cv2
+        import numpy as np
+    except ImportError:
+        return None
+
+    array = np.array(cell.convert("L"))
+    height, width = array.shape
+    if width < 50 or height < 50:
+        return None
+
+    blurred = cv2.GaussianBlur(array, (5, 5), 0)
+    _, thresh = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+    thresh = cv2.dilate(thresh, np.ones((9, 9), np.uint8))
+    contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not contours:
+        return None
+
+    largest = max(contours, key=cv2.contourArea)
+    rect = cv2.minAreaRect(largest)
+    _, (rect_w, rect_h), _ = rect
+    if rect_w <= 0 or rect_h <= 0:
+        return None
+
+    area_ratio = (rect_w * rect_h) / float(width * height)
+    if not (_CELL_MIN_CARD_AREA_RATIO <= area_ratio <= _CELL_MAX_CARD_AREA_RATIO):
+        return None
+
+    aspect = min(rect_w, rect_h) / max(rect_w, rect_h)
+    if abs(aspect - _CARD_ASPECT) > _ASPECT_TOLERANCE:
+        return None
+
+    rectangularity = cv2.contourArea(largest) / (rect_w * rect_h)
+    if rectangularity < _MIN_RECTANGULARITY:
+        return None
+
+    corners = _order_corners(cv2.boxPoints(rect))
+    out_w, out_h = _corner_span(corners)
+    if out_w is None or out_h is None or out_w > out_h:
+        # `_order_corners` assume um retângulo perto de axis-aligned — é o
+        # caso real (folga de poucos graus dentro da manga), nunca perto de
+        # 45°. Se o resultado saiu "deitado", a carta não está reta o
+        # bastante para confiar — mesma filosofia de nunca chutar.
+        return None
+
+    destination = np.array(
+        [[0, 0], [out_w - 1, 0], [out_w - 1, out_h - 1], [0, out_h - 1]], dtype="float32"
+    )
+    matrix = cv2.getPerspectiveTransform(corners, destination)
+    color_array = np.array(cell.convert("RGB"))
+    warped = cv2.warpPerspective(color_array, matrix, (out_w, out_h), flags=cv2.INTER_CUBIC)
+    return Image.fromarray(warped)
+
+
+def _order_corners(points: Any) -> Any:
+    """Ordena 4 cantos em top-left, top-right, bottom-right, bottom-left.
+
+    `cv2.boxPoints` devolve os 4 cantos em sequência ao redor do retângulo,
+    mas o vértice inicial varia entre versões do OpenCV — em vez de
+    depender disso (ou do sinal do ângulo do `minAreaRect`, armadilha real
+    batida no protótipo desta sessão), reordena pela soma/diferença das
+    coordenadas: o canto de soma mínima é top-left, o de soma máxima é
+    bottom-right, e a diferença (x−y) desempata top-right/bottom-left. Só
+    funciona perto de axis-aligned, que é o caso real aqui.
+    """
+    import numpy as np
+
+    points = np.asarray(points)
+    total = points.sum(axis=1)
+    diff = points[:, 0] - points[:, 1]
+    top_left = points[int(np.argmin(total))]
+    bottom_right = points[int(np.argmax(total))]
+    top_right = points[int(np.argmax(diff))]
+    bottom_left = points[int(np.argmin(diff))]
+    return np.array([top_left, top_right, bottom_right, bottom_left], dtype="float32")
+
+
+def _corner_span(corners: Any) -> tuple[int | None, int | None]:
+    """Largura/altura de saída a partir dos 4 cantos já ordenados (média dos
+    dois lados opostos, para suavizar o ruído de detecção de contorno)."""
+    import numpy as np
+
+    top_w = float(np.linalg.norm(corners[1] - corners[0]))
+    bottom_w = float(np.linalg.norm(corners[2] - corners[3]))
+    left_h = float(np.linalg.norm(corners[3] - corners[0]))
+    right_h = float(np.linalg.norm(corners[2] - corners[1]))
+    out_w = round((top_w + bottom_w) / 2)
+    out_h = round((left_h + right_h) / 2)
+    if out_w <= 0 or out_h <= 0:
+        return None, None
+    return out_w, out_h
 
 
 class InvalidGridSizeError(ImageError):

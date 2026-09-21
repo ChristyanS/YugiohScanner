@@ -23,8 +23,20 @@ from PIL import Image
 
 from ..config import Settings
 from ..errors import YugiohScannerError
-from ..images.grid import detect_grid_cells, is_cell_blank, manual_grid_cells
-from ..images.preprocess import BoundingBox, ImageError, PreparedImage, load_image, prepare_regions
+from ..images.grid import (
+    detect_grid_cells,
+    is_cell_blank,
+    locate_and_deskew_card,
+    manual_grid_cells,
+)
+from ..images.preprocess import (
+    CODE_ROI_GRID,
+    BoundingBox,
+    ImageError,
+    PreparedImage,
+    load_image,
+    prepare_regions,
+)
 from ..ocr.base import (
     REGION_CODE,
     REGION_FULL,
@@ -300,12 +312,56 @@ def process_task(task: ScanTask) -> ScanOutcome:
     return ScanOutcome(task=task, crops=crops, elapsed_ms=elapsed_ms, skipped_empty=skipped_empty)
 
 
+def _prepare_crop(image: Image.Image, task: ScanTask, region: CropRegion) -> PreparedImage:
+    """Recorta a célula e tenta endireitar a carta antes das ROIs de sempre.
+
+    **Achado real desta sessão**: `detect_card_bounds` (o refino de sempre
+    dentro de `prepare_regions`) sub-ajusta contra o fundo de uma célula de
+    grade recortada de uma página de fichário (costura da manga, carta
+    vizinha, argola), o que desloca `NAME_ROI`/`CODE_ROI` para cima do texto
+    de verdade — e a folga rotacional da carta dentro da manga piora ainda
+    mais uma ROI já maldisposta. `images/grid.py::locate_and_deskew_card`
+    acha o retângulo rotacionado de verdade da carta dentro da célula e a
+    devolve já endireitada e justa.
+
+    Best-effort: sem `cv2`/`numpy` instalados, ou sem confiança na detecção
+    (célula ruim demais, sem "cv" instalado), cai byte a byte no caminho de
+    sempre — `prepare_regions(image, region=region.bbox)` — comportamento
+    inalterado (mesma filosofia de "recortar errado é pior que não
+    recortar" das demais heurísticas deste módulo).
+    """
+    if region.bbox is None:
+        return prepare_regions(image, source=task.path, region=None)
+
+    cell = image.crop(region.bbox.to_pixels(*image.size))
+    deskewed = locate_and_deskew_card(cell)
+    cell.close()
+
+    if deskewed is None:
+        return prepare_regions(image, source=task.path, region=region.bbox)
+
+    try:
+        prepared = prepare_regions(
+            deskewed, source=task.path, region=None, code_roi=CODE_ROI_GRID
+        )
+    finally:
+        deskewed.close()
+    prepared.notes["deskewed"] = True
+    prepared.notes["grid_region"] = [
+        region.bbox.left,
+        region.bbox.top,
+        region.bbox.right,
+        region.bbox.bottom,
+    ]
+    return prepared
+
+
 def _process_one_crop(
     provider: OCRProvider, image: Image.Image, task: ScanTask, region: CropRegion
 ) -> CropOutcome:
     """O corpo de sempre (ROIs + OCR) aplicado a um recorte da foto já carregada."""
     try:
-        prepared = prepare_regions(image, source=task.path, region=region.bbox)
+        prepared = _prepare_crop(image, task, region)
     except ImageError as exc:
         return CropOutcome(region=region, status="invalid", error=exc.user_message)
     except Exception as exc:  # pragma: no cover - defensivo

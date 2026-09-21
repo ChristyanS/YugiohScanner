@@ -568,6 +568,16 @@ class ScanJob(Base):
     workers: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="running")
 
+    #: Política efetiva no momento deste scan — não `Settings` atual, que
+    #: pode ter mudado desde então. Sem gravar isto por job, a tela de
+    #: detalhe não tinha como explicar por que a mesma pasta escaneada duas
+    #: vezes produz `auto_added` bem diferentes (achado real do usuário:
+    #: "por que a quantidade de cartas que passam automaticamente depende do
+    #: filtro" — a resposta está nestes três campos, congelados por execução).
+    auto_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    require_set: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    require_rarity: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
     total_images: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     processed: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     skipped: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
@@ -734,6 +744,14 @@ class ScanResult(Base):
     #: `candidates` está vazio (nome ilegível — comum em cartas JP/CJK, onde
     #: o OCR de nome não tem chance nenhuma, mas o passcode sozinho resolve).
     card_name: str | None = None
+    #: Também não é coluna — calculado sob demanda por
+    #: `ScanService._attach_print_info` a partir de `card_print_id`. É o set/
+    #: raridade **resolvidos no catálogo** (não o texto bruto do OCR) — a
+    #: tela de detalhe do scan usa isto ao lado das colunas de OCR como
+    #: comparador visual (pedido do usuário: conferir a leitura contra o que
+    #: de fato foi gravado).
+    resolved_set_code: str | None = None
+    resolved_rarity: str | None = None
 
     __table_args__ = (
         Index("ix_scan_result_image", "scan_image_id"),

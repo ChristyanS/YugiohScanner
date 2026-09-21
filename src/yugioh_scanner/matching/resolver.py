@@ -148,7 +148,20 @@ class PrintResolver:
 
         resolution = CodeResolution(raw=raw_code)
         initial_parse = parse_set_code(raw_code)
-        if initial_parse is not None:
+        if initial_parse is not None and (
+            initial_parse.region is None or len(initial_parse.region) >= 2
+        ):
+            # Região de 1 letra (prints europeus antigos, `PSV-E088`) só é
+            # confiável depois de validada contra o catálogo abaixo — achado
+            # real (Scan #11): o OCR troca "T" por "1" dentro de uma região
+            # de 2 letras ("PT002" -> "P1002"), e "P" sozinho bate na mesma
+            # regra de região de 1 letra (resto só com dígitos). Sem esta
+            # guarda, `detected_region="P"` vencia `best.language="PT"` do
+            # nome (`matching/engine.py`, `or` é guloso: string não-vazia
+            # ganha de qualquer jeito) e gravava um idioma de 1 letra em
+            # `ScanResult.detected_language` — que o CHECK de
+            # `card_print_override` rejeita (2-3 letras), travando a
+            # confirmação da revisão inteira sem nenhum erro visível.
             resolution.detected_region = initial_parse.region
 
         variants = correction_variants(raw_code)
@@ -164,6 +177,11 @@ class PrintResolver:
             if prints:
                 resolution.matched_code = normalized
                 resolution.prints = prints
+                if parsed is not None:
+                    # Validado pelo catálogo agora — mesmo uma região de 1
+                    # letra pode ser confiada (o `PrintMatch` encontrado
+                    # prova que não era ruído de OCR).
+                    resolution.detected_region = parsed.region
                 if variant != variants[0]:
                     log.debug("matching.code_corrected", raw=raw_code, matched=normalized)
                 return resolution

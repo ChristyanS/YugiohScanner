@@ -2,7 +2,9 @@
 
 **Status:** aceito e implementado (CLI, Web e captura WIA contra hardware real)
 **Data:** 2026-09-12 (implementação inicial); atualizado no mesmo dia após
-teste contra scanner real (Canon G3010)
+teste contra scanner real (Canon G3010); atualizado em 2026-09-18 com deskew
+por célula (ver "Deskew por célula" abaixo); atualizado em 2026-09-20 com
+calibragem contra revisão real do Scan #11 (ver "Scan #11" abaixo)
 
 ## Contexto
 
@@ -157,6 +159,141 @@ usa — `ensure_cv_available()` só é chamado quando o modo automático (sem
   com o cliente reenviando o `folder` da resposta anterior
   (`CaptureStartBody.folder`) para acumular todas as páginas na mesma
   pasta antes de rodar o scan.
+
+## Deskew por célula (2026-09-18)
+
+**Pedido do usuário:** melhorar a calibragem de cartas na grade, porque as
+cartas de verdade não ficam 100% alinhadas dentro da manga do fichário —
+algumas ficam alguns graus tortas. Mapeou 3 digitalizações reais próprias
+(`Scanner_20260913.png`, `(5)`, `(10)` — páginas 3x3 de fichário, 27 cartas
+com gabarito de nome/set/passcode) para calibrar contra dado real, copiadas
+para `tests/fixtures/grid_scans/`.
+
+**Achado real, medido contra essas 3 fotos**: o problema não era só rotação.
+`detect_card_bounds` (heurística Pillow de borda, `images/preprocess.py`) foi
+calibrado para foto de carta única sobre mesa lisa; rodado dentro de uma
+célula já recortada de uma página de fichário (costura da manga plástica,
+carta vizinha, argola do fichário ao fundo), ele sub-ajusta — devolve quase a
+célula inteira em vez da borda real da carta. Isso desloca `NAME_ROI`/
+`CODE_ROI` para cima do texto de verdade, e a folga rotacional da carta
+dentro da manga (a queixa original) piora ainda mais uma ROI já maldisposta.
+Medido antes da correção contra `Scanner_20260913.png` (9 cartas, OCR real):
+nome correto em 1/9 (a maioria voltou **vazia** — a ROI não pegava texto
+nenhum), set code 5/9, passcode 8/9.
+
+**Decisão:** `images/grid.py::locate_and_deskew_card(cell) -> Image | None`,
+best-effort (não usa `ensure_cv_available()` — é melhoria opcional sobre o
+caminho de grade, não um modo pedido explicitamente pelo usuário; sem
+`cv2`/`numpy`, devolve `None` em silêncio). Acha o maior contorno da célula
+(Otsu threshold invertido + dilate), pega o retângulo rotacionado de verdade
+(`cv2.minAreaRect`), aplica os mesmos gates de confiança de
+`detect_grid_cells` (aspecto 59:86mm, retangularidade) mais um piso de área
+relativo à célula (não à página inteira), e endireita via
+`cv2.getPerspectiveTransform`/`warpPerspective` usando os 4 cantos do
+`boxPoints` — não por ângulo (`warpAffine`), para não depender da convenção
+de sinal do ângulo do `minAreaRect`, que variou entre um protótipo e outro
+nesta sessão. Sem confiança, devolve `None` e quem chama
+(`scanner/worker.py::_prepare_crop`) cai byte a byte no
+`prepare_regions(image, region=region.bbox)` de sempre — mesma filosofia de
+"recortar errado é pior que não recortar".
+
+`images/preprocess.py::prepare_regions` ganhou um parâmetro injetável
+`code_roi` (padrão `CODE_ROI`, comportamento inalterado para quem não passa
+nada). O recorte endireitado tem margem quase zero — bem mais justo que o
+`detect_card_bounds` de sempre — então a mesma fração de altura cai em lugar
+diferente: medido contra o corpus, a arte termina 10 pontos percentuais mais
+cedo do que `CODE_ROI` assumia, então o topo antigo (0.665) capturava um
+bocado de arte de alto contraste como ruído antes do código de verdade. Nova
+constante `CODE_ROI_GRID = BoundingBox(0.40, 0.70, 0.98, 0.775)`, passada por
+`_prepare_crop` só quando o deskew teve sucesso. `NAME_ROI`/`PASSCODE_ROI`
+não precisaram de variante — já funcionaram bem contra o recorte endireitado
+com as constantes de sempre.
+
+**Resultado medido** (`python scripts/calibrate_grid.py`, corpus completo de
+27 células, 3 fotos): **100% das cartas identificadas corretamente** pelo
+matching (identidade resolvida via passcode como chave primária — decisão
+anterior, não desta ADR); passcode lido corretamente em 85% das células
+crua (o resto tem ruído de OCR que `domain/passcode.py::clean_passcode` ainda
+resolve, por isso o match continua 100%); set code em 65% como string exata
+(erros são principalmente confusão de caractere do OCR — `SDY.037` por
+`SDY-037`, `P1002` por `PT002` — não posicionamento, e não impedem a
+identificação porque o passcode já resolveu a carta). Ruído remanescente de
+OCR (troca de caractere, cartas em japonês que o modelo padrão não lê) é
+limitação do provider de OCR, não de calibragem/alinhamento — fora do escopo
+desta mudança.
+
+## Scan #11: calibragem contra revisão real (2026-09-20)
+
+**Pedido do usuário:** usar o Scan #11 (job real do app, 11 fotos 3x3, 99
+células) para calibragem — o usuário revisou manualmente todas as 99 células
+em `/review`, então cada decisão final (`confirmed`/`pending`/`rejected`)
+é gabarito confiável: 88 confirmadas e corretas, 4 pendentes (identidade
+certa, só travadas por um bug), 7 rejeitadas por serem fundo de carta (não
+devem entrar na coleção).
+
+**Bug real encontrado e corrigido: confirmação travava em `pending` para
+sempre.** As 4 células pendentes tinham em comum um código lido com o "T" de
+uma região de 2 letras confundido com "1" pelo OCR (`SR06-PT002` →
+`SR06-P1002`, `SDSB-PT016` → `SDSB-P1016`, `SR06-PT008` → `SR06-P1008`).
+`domain/setcode.py::_split_region` reconhece região de 1 letra pra prints
+europeus antigos de verdade (`PSV-E088`) — e "P" sozinho bate nessa mesma
+regra (resto só com dígitos). Sem confirmação do catálogo,
+`matching/resolver.py::resolve()` aceitava esse "P" não confirmado como
+`detected_region`, que virava `ScanResult.detected_language="P"` — um valor
+de 1 letra que o CHECK de `card_print_override` rejeita (exige 2-3 letras).
+Ao confirmar a revisão, o `INSERT` estourava `IntegrityError` **dentro do
+`flush()` de `mark_applied`**, desfazendo a transação inteira (decisão,
+`collection_item`, tudo) sem nenhum erro visível na tela — a leitura voltava
+pra fila de pendências como se nada tivesse acontecido. Corrigido em duas
+camadas: `PrintResolver.resolve()` só confia numa região de 1 letra depois
+de validada contra o catálogo (mesmo espírito de "recortar errado é pior que
+não recortar"); `ScanService.confirm_result` também passou a cair para
+`DEFAULT_LANGUAGE` em vez de propagar um `language` malformado (2-3 letras,
+maiúsculo) — cobre tanto leituras antigas já gravadas com o valor quebrado
+quanto um `language` arbitrário vindo da API. Testado contra uma cópia do
+banco real: as 4 confirmações que travavam antes da correção aplicam
+normalmente depois.
+
+**Corpus estendido com dado real de uso, não só de teste.** 9 das 11 fotos
+do Scan #11 foram copiadas para `tests/fixtures/grid_scans/` (2 eram bytes
+idênticos a `scan_05.png`/`scan_10.png` — a mesma página do fichário foi
+digitalizada de novo entre as duas sessões — excluídas para não contar a
+mesma foto 2x). Gabarito construído a partir da revisão humana: nome/print
+das 88 confirmadas lidos direto de `card_print.set_code_full`; as 4
+pendentes tiveram a identidade inferida por carta irmã idêntica na mesma
+foto (mesmo passcode); as 7 de fundo de carta viram `{"card_back": true}` —
+`scripts/calibrate_grid.py` ganhou essa categoria: em vez de contar como erro
+de nome/set/passcode, verifica só que o matching não autoconfirma o fundo
+como se fosse uma carta de verdade (`Decision.AUTO`).
+
+**Resultado medido** (corpus completo, 14 fotos / 108 células — 27 antigas +
+81 do Scan #11): **nome identificado corretamente em 96,0%** das 101 células
+de carta (identidade real — é o que decide o que entra na coleção); passcode
+cru batendo em 73,3%; set code como string exata em 70,7-71,0%; **100% dos
+7 fundos de carta corretamente não autoconfirmados** (nenhum falso positivo).
+
+**Achado real, novo nesta sessão: confusão sistemática de glifo entre
+"P"/"T" e "1"/"I" na região do set code.** Cerca de 15 das ~30 células com
+set code errado nesta medição têm exatamente esse padrão — não é ruído
+aleatório, é o formato pequeno/itálico do set code no OCR (RapidOCR) lendo
+"T" como "1" (`SR06-PT002`→`P1002`, `RA05-PT026`→`P1026`, `SR06-PT008`→
+`P1008`) ou como "I" (`SDSB-PT021`→`PI021`, `PHHY-PT029`→`PI029`,
+`DASA-PT019`→`PI019`), às vezes "P" como "1" (`SR06-PT011`→`1T011`,
+`RA05-PT009`→`1T009`) e, mais raro, os dois juntos (`SDCS-PT001`→`TT001`).
+`domain/setcode.py::correction_variants` hoje só corrige dígitos↔letras
+dentro do **número** (letra→dígito) e do **prefixo** (dígito→letra) — nunca
+dentro da **região** de 2 letras, que é onde esse padrão bate. Um achado
+secundário relacionado: a correção do prefixo também não é só numa direção —
+`SR06`→`SRO6` (dígito lido como letra) e `SDY`→`SOY`/`30Y` (letra lida como
+dígito) apareceram os dois no mesmo corpus, contrariando a suposição de hoje
+de que só uma direção vale por posição. Nenhum dos dois vira identidade
+errada (o passcode resolve a carta certa de qualquer jeito, 96% de nome
+correto é prova disso) — o custo real é a carta entrar com print/raridade
+não resolvidos, exigindo revisão manual extra que uma correção melhor de
+região evitaria. **Pendente**: estender `correction_variants` para tentar
+`1`/`I`↔`T` (e `1`↔`P`) especificamente na posição da região, e permitir as
+duas direções de correção no prefixo — não implementado nesta sessão, fica
+registrado para calibragem futura.
 
 ## Consequências
 

@@ -13,16 +13,18 @@ import sys
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pytest
 from PIL import Image, ImageDraw
 
-from tests.factories import make_card_image
+from tests.factories import CARD_ASPECT, make_card_image
 from yugioh_scanner.images.grid import (
     CvUnavailableError,
     InvalidGridSizeError,
     detect_grid_cells,
     ensure_cv_available,
     is_cell_blank,
+    locate_and_deskew_card,
     manual_grid_cells,
     parse_grid_size,
 )
@@ -169,6 +171,157 @@ class TestDetectGridCellsWithRealOpenCV:
 
         cells = detect_grid_cells(canvas)
         assert len(cells) == 4
+
+
+class _FakeCv2Deskew:
+    """Fake cv2 para exercitar os gates de confiança de
+    `locate_and_deskew_card` sem depender do extra `cv`. `rect` é o
+    `(centro, (w, h), ângulo)` que `minAreaRect` devolveria; `boxPoints`
+    devolve um retângulo perfeitamente axis-aligned a partir dele — suficiente
+    para testar os gates (área/aspecto/retangularidade), que são lógica pura
+    em volta do que `cv2` devolve. O warp de verdade (rotação/perspectiva) só
+    é exercitado contra OpenCV real, em `TestLocateAndDeskewCardWithRealOpenCV`.
+    """
+
+    THRESH_BINARY_INV = 1
+    THRESH_OTSU = 2
+    RETR_EXTERNAL = 1
+    CHAIN_APPROX_SIMPLE = 1
+    INTER_CUBIC = 1
+
+    def __init__(
+        self,
+        rect: tuple[tuple[float, float], tuple[float, float], float] | None,
+        contour_area: float = 0.0,
+        has_contours: bool = True,
+    ) -> None:
+        self._rect = rect
+        self._contour_area = contour_area
+        self._has_contours = has_contours
+
+    def GaussianBlur(self, array: Any, ksize: Any, sigma: Any) -> Any:  # noqa: N802
+        return array
+
+    def threshold(self, array: Any, thresh: Any, maxval: Any, type_: Any) -> tuple[Any, Any]:
+        return None, array
+
+    def dilate(self, array: Any, kernel: Any) -> Any:
+        return array
+
+    def findContours(self, *_args: Any, **_kwargs: Any) -> tuple[list[str], None]:  # noqa: N802
+        return (["contour"], None) if self._has_contours else ([], None)
+
+    def contourArea(self, _contour: Any) -> float:  # noqa: N802
+        return self._contour_area
+
+    def minAreaRect(self, _contour: Any) -> Any:  # noqa: N802
+        return self._rect
+
+    def boxPoints(self, rect: Any) -> Any:  # noqa: N802
+        (cx, cy), (w, h), _angle = rect
+        return np.array(
+            [
+                [cx - w / 2, cy - h / 2],
+                [cx + w / 2, cy - h / 2],
+                [cx + w / 2, cy + h / 2],
+                [cx - w / 2, cy + h / 2],
+            ]
+        )
+
+    def getPerspectiveTransform(self, _src: Any, _dst: Any) -> str:  # noqa: N802
+        return "matrix"
+
+    def warpPerspective(self, _array: Any, _matrix: Any, size: Any, flags: Any = None) -> Any:  # noqa: N802
+        w, h = size
+        return np.zeros((h, w, 3), dtype=np.uint8)
+
+
+def _install_fake_cv2_deskew(monkeypatch: pytest.MonkeyPatch, fake: _FakeCv2Deskew) -> None:
+    monkeypatch.setitem(sys.modules, "cv2", fake)
+
+
+#: Uma célula 200x280 com uma carta 140x204 dentro (aspecto 0.686 exato,
+#: área 51% da célula) — passa em todos os gates de confiança.
+_CONFIDENT_RECT = ((100.0, 140.0), (140.0, 204.0), -1.5)
+_CELL_SIZE = (200, 280)
+
+
+class TestLocateAndDeskewCard:
+    def test_returns_none_without_cv_extra(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setitem(sys.modules, "cv2", None)
+        assert locate_and_deskew_card(Image.new("RGB", _CELL_SIZE)) is None
+
+    def test_returns_none_when_cell_is_too_small(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _install_fake_cv2_deskew(monkeypatch, _FakeCv2Deskew(_CONFIDENT_RECT, contour_area=28000))
+        assert locate_and_deskew_card(Image.new("RGB", (40, 40))) is None
+
+    def test_returns_none_without_contours(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _install_fake_cv2_deskew(monkeypatch, _FakeCv2Deskew(None, has_contours=False))
+        assert locate_and_deskew_card(Image.new("RGB", _CELL_SIZE)) is None
+
+    def test_returns_none_when_area_ratio_too_small(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # 60x87 dentro de uma célula 200x280 — carta minúscula demais, não é
+        # a carta real da célula (ruído/detalhe).
+        rect = ((100.0, 140.0), (60.0, 87.0), 0.0)
+        _install_fake_cv2_deskew(monkeypatch, _FakeCv2Deskew(rect, contour_area=60 * 87))
+        assert locate_and_deskew_card(Image.new("RGB", _CELL_SIZE)) is None
+
+    def test_returns_none_when_aspect_is_wrong(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # Quadrado: ocupa área plausível da célula, mas não tem a proporção
+        # 59:86mm de uma carta.
+        rect = ((110.0, 140.0), (180.0, 180.0), 0.0)
+        _install_fake_cv2_deskew(monkeypatch, _FakeCv2Deskew(rect, contour_area=180 * 180))
+        assert locate_and_deskew_card(Image.new("RGB", (220, 220))) is None
+
+    def test_returns_none_when_rectangularity_is_low(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # Mesmo retângulo "confiante", mas o contorno de verdade cobre só
+        # metade da área do retângulo que o envolve — forma irregular, não
+        # uma carta.
+        rect_area = _CONFIDENT_RECT[1][0] * _CONFIDENT_RECT[1][1]
+        _install_fake_cv2_deskew(
+            monkeypatch, _FakeCv2Deskew(_CONFIDENT_RECT, contour_area=rect_area * 0.5)
+        )
+        assert locate_and_deskew_card(Image.new("RGB", _CELL_SIZE)) is None
+
+    def test_returns_deskewed_image_when_confident(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _install_fake_cv2_deskew(
+            monkeypatch, _FakeCv2Deskew(_CONFIDENT_RECT, contour_area=140 * 204 * 0.98)
+        )
+        result = locate_and_deskew_card(Image.new("RGB", _CELL_SIZE))
+
+        assert result is not None
+        assert result.size == (140, 204)
+
+
+@pytest.mark.ocr
+class TestLocateAndDeskewCardWithRealOpenCV:
+    """Mesma função, sem fakear `cv2` (opt-in: `pytest -m ocr`) — confirma
+    contra OpenCV de verdade que uma carta sintética rotacionada sai reta."""
+
+    def test_straightens_a_rotated_synthetic_card(self, tmp_path: Path) -> None:
+        # `margin=0`: a carta sintética preenche a própria imagem (sem a
+        # moldura escura que `make_card_image` desenharia com `margin>0` —
+        # essa moldura é o alvo de `detect_card_bounds`, não o caso aqui).
+        # Colada num "fundo de manga" branco e só então rotacionada, para
+        # simular uma célula de grade de verdade: a carta é o retângulo mais
+        # proeminente contra um fundo bem mais discreto que ela.
+        card = Image.open(make_card_image(tmp_path / "card.jpg", margin=0))
+        cell = Image.new("RGB", (card.width + 160, card.height + 160), "white")
+        cell.paste(card, (80, 80))
+        rotated = cell.rotate(-4, expand=True, fillcolor=(255, 255, 255), resample=Image.BICUBIC)
+
+        result = locate_and_deskew_card(rotated)
+
+        assert result is not None
+        aspect = min(result.size) / max(result.size)
+        assert aspect == pytest.approx(CARD_ASPECT, abs=0.02)
+        # A carta reta deve ficar bem menor que a célula rotacionada com
+        # fundo — confirma que também recortou a folga, não só endireitou.
+        assert result.width < rotated.width
+        assert result.height < rotated.height
+
+    def test_returns_none_for_a_blank_cell(self) -> None:
+        assert locate_and_deskew_card(Image.new("RGB", (300, 435), "white")) is None
 
 
 class TestIsCellBlank:

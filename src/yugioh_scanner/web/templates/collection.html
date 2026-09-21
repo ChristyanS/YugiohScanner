@@ -85,6 +85,16 @@
   </form>
 </details>
 
+<details>
+  <summary>{{ t('collection.danger_zone_summary') }}</summary>
+  <p class="kbd-hint">{{ t('collection.clear_all_hint') }}</p>
+  <button type="button" class="contrast outline"
+          hx-delete="/collection"
+          hx-target="#results"
+          hx-swap="innerHTML"
+          hx-confirm="{{ t('collection.confirm_clear_all') }}">{{ t('collection.clear_all_button') }}</button>
+</details>
+
 <div id="results">
   {% include "partials/collection_results.html" %}
 </div>
