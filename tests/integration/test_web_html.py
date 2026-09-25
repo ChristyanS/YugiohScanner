@@ -129,6 +129,36 @@ class TestCollectionInlineActions:
         assert "Dark Magician" in response.text
         assert "Pot of Greed" not in response.text
 
+    def test_binder_view_renders_a_3x3_grid_with_empty_pockets(
+        self, client: TestClient
+    ) -> None:
+        client.post("/api/v1/collection", json={"name": "Dark Magician"})
+        response = client.get(
+            "/collection/rows", params={"view": "binder", "lang": "EN"}
+        )
+        assert response.status_code == 200
+        assert 'class="binder-grid"' in response.text
+        assert response.text.count('class="binder-pocket"') == 1
+        assert 'class="binder-pocket binder-pocket-empty"' in response.text
+
+    def test_binder_view_paginates_across_pages(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from yugioh_scanner.web.routes import collection as collection_module
+
+        monkeypatch.setattr(collection_module, "_PAGE_SIZE_BINDER", 1)
+        client.post("/api/v1/collection", json={"name": "Dark Magician"})
+        client.post("/api/v1/collection", json={"name": "Pot of Greed"})
+
+        page1 = client.get("/collection", params={"view": "binder", "lang": "EN", "page": 1})
+        assert "página 1 de 2" in page1.text
+        assert page1.text.count('class="binder-pocket"') == 1
+        assert 'id="pagination-prev-btn" class="pagination-btn" disabled' in page1.text
+
+        page2 = client.get("/collection", params={"view": "binder", "lang": "EN", "page": 2})
+        assert "página 2 de 2" in page2.text
+        assert 'id="pagination-next-btn" class="pagination-btn" disabled' in page2.text
+
 
 def _sdk_print_id(client: TestClient) -> int:
     card = client.get(f"/api/v1/cards/{DARK_MAGICIAN}").json()
@@ -183,19 +213,45 @@ class TestDatabaseScreen:
 
         monkeypatch.setattr(cards_module, "_PAGE_SIZE_TABLE", 2)
 
-        # As strings de navegação também aparecem como vocabulário no
-        # catálogo `window.I18N` embutido em toda página (ponte de tradução
-        # para JS) — checar o link renderizado (`>Anterior</a>`), não a
-        # palavra solta, para não dar falso positivo contra o catálogo.
+        # A navegação vira botões que reenviam o form de filtros
+        # (`partials/pagination_nav.html`), não mais links `<a hx-get=...>`
+        # com a query montada à mão — checar o atributo `disabled` de cada
+        # botão em vez de procurar o texto solto (que também aparece no
+        # catálogo `window.I18N` embutido em toda página).
         page1 = client.get("/cards", params={"page": 1})
         assert "página 1 de 3" in page1.text
-        assert "Próxima &rarr;</a>" in page1.text
-        assert "Anterior</a>" not in page1.text
+        assert 'id="pagination-prev-btn" class="pagination-btn" disabled' in page1.text
+        assert 'id="pagination-next-btn" class="pagination-btn" disabled' not in page1.text
 
         page2 = client.get("/cards", params={"page": 2})
         assert "página 2 de 3" in page2.text
-        assert "Anterior</a>" in page2.text
-        assert "Próxima &rarr;</a>" in page2.text
+        assert 'id="pagination-prev-btn" class="pagination-btn" disabled' not in page2.text
+        assert 'id="pagination-next-btn" class="pagination-btn" disabled' not in page2.text
+
+    def test_binder_view_renders_a_3x3_grid(self, client: TestClient) -> None:
+        response = client.get("/cards", params={"view": "binder", "lang": "EN"})
+        assert response.status_code == 200
+        assert 'class="binder-grid"' in response.text
+        assert "Dark Magician" in response.text
+
+    def test_binder_view_shows_nine_cards_per_page(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from yugioh_scanner.web.routes import cards as cards_module
+
+        monkeypatch.setattr(cards_module, "_PAGE_SIZE_BINDER", 2)
+
+        page1 = client.get("/cards", params={"view": "binder", "page": 1})
+        assert "página 1 de 3" in page1.text
+        # `class="binder-pocket"` (só uma classe) é o bolso preenchido; o
+        # bolso vazio tem uma segunda classe (`binder-pocket-empty`) e não
+        # bate nessa substring exata.
+        assert page1.text.count('class="binder-pocket"') == 2
+        assert 'id="pagination-prev-btn" class="pagination-btn" disabled' in page1.text
+
+        page2 = client.get("/cards", params={"view": "binder", "page": 2})
+        assert "página 2 de 3" in page2.text
+        assert 'id="pagination-prev-btn" class="pagination-btn" disabled' not in page2.text
 
 
 class TestMultilingualCatalog:
@@ -304,20 +360,32 @@ class TestCollectionMultilingual:
 
     def test_search_by_translated_name_finds_the_item(self, client: TestClient) -> None:
         client.post("/api/v1/collection", json={"name": "Dark Magician"})
-        # `lang=EN` isola o que este teste quer verificar (busca em PT acha
-        # o item) do idioma de exibição padrão (que agora segue o idioma
-        # global, coberto em `test_listing_defaults_to_ui_language`).
+        # A busca multilíngue respeita o idioma escolhido (bug corrigido:
+        # antes ela casava contra qualquer um dos 7 idiomas sincronizados,
+        # ignorando `lang`). Com `lang=PT`, "Mago Negro" acha o item — e a
+        # listagem já mostra o nome traduzido, coerente com o idioma pedido.
+        response = client.get("/collection", params={"search": "Mago Negro", "lang": "PT"})
+        assert response.status_code == 200
+        assert "Mago Negro" in response.text
+
+    def test_search_does_not_match_a_different_language_than_the_one_chosen(
+        self, client: TestClient
+    ) -> None:
+        client.post("/api/v1/collection", json={"name": "Dark Magician"})
+        # Com `lang=EN` explícito, o termo em português não deve mais casar
+        # — é exatamente o bug relatado pelo usuário ("busca não leva em
+        # consideração o idioma escolhido").
         response = client.get("/collection", params={"search": "Mago Negro", "lang": "EN"})
         assert response.status_code == 200
-        assert "Dark Magician" in response.text
+        assert "Dark Magician" not in response.text
 
     def test_rows_partial_search_by_translated_name(self, client: TestClient) -> None:
         client.post("/api/v1/collection", json={"name": "Dark Magician"})
         client.post("/api/v1/collection", json={"name": "Pot of Greed"})
         response = client.get(
-            "/collection/rows", params={"search": "Mago Negro", "lang": "EN"}
+            "/collection/rows", params={"search": "Mago Negro", "lang": "PT"}
         )
-        assert "Dark Magician" in response.text
+        assert "Mago Negro" in response.text
         assert "Pot of Greed" not in response.text
 
     def test_listing_shows_name_in_the_chosen_language(self, client: TestClient) -> None:

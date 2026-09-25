@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from ..db.fts import search_alt_card_ids, search_card_ids
 from ..db.tables import Card, CardAltName, CardPrint
+from .card_filters import CardAttributeFilters, apply_card_attribute_filters
 
 #: Teto de candidatos considerados para uma busca textual (usado tanto para
 #: paginar quanto para contar). Sem teto, uma query genérica ("dragon") teria
@@ -69,13 +70,16 @@ class CardRepository:
         )
         return {row.card_id: row for row in self.session.scalars(stmt)}
 
-    def _matching_ids(self, query: str, *, limit: int) -> list[int]:
-        """IDs de carta cujo nome bate com `query` **em qualquer idioma**
-        sincronizado (Fase 3: busca multilíngue) — inglês primeiro (é o nome
-        canônico, então tende a ser o que mais gente digita), depois FR/DE/
-        IT/PT para quem pesquisa pelo nome que está impresso na carta física.
-        Nunca duplica: uma carta que bate nos dois só aparece uma vez, na
-        posição do primeiro casamento.
+    def _matching_ids(self, query: str, *, limit: int, language: str | None = None) -> list[int]:
+        """IDs de carta cujo nome bate com `query` no nome canônico (inglês,
+        sempre) e, opcionalmente, na tradução do idioma de exibição
+        escolhido (Fase 3: busca multilíngue). `language=None`/`"EN"` busca
+        só o canônico — sem isto a busca casava nome em **qualquer** um dos
+        7 idiomas sincronizados, mesmo com a tela mostrando um idioma
+        escolhido (achado real do usuário: buscar com "exibir em PT" também
+        trazia cartas que só bateram em francês/japonês/etc). Nunca duplica:
+        uma carta que bate nos dois só aparece uma vez, na posição do
+        primeiro casamento.
 
         Antes de tudo, se `query` for só dígitos, tenta casar direto por
         `Card.id` — que é o passcode (`db/tables.py:98`), não um id
@@ -99,7 +103,10 @@ class CardRepository:
         if len(merged) >= limit:
             return merged[:limit]
 
-        for card_id in search_alt_card_ids(self.session, query, limit=limit):
+        if language is None or language == "EN":
+            return merged[:limit]
+
+        for card_id in search_alt_card_ids(self.session, query, limit=limit, language=language):
             if card_id not in seen:
                 seen.add(card_id)
                 merged.append(card_id)
@@ -110,13 +117,16 @@ class CardRepository:
         query: str | None = None,
         *,
         set_prefix: str | None = None,
+        filters: CardAttributeFilters | None = None,
         limit: int = 50,
         offset: int = 0,
         locale: str = "EN",
         lang: str = "EN",
     ) -> list[Card]:
         """Busca por nome (FTS5, plano §7.3, multilíngue desde a Fase 3 do
-        faseamento web) opcionalmente filtrada por set.
+        faseamento web) opcionalmente filtrada por set e por atributos
+        (`filters` — Tipo/Atributo/Race/Arquétipo/ATK/DEF/Estrelas/Escala/
+        Link, ver `repositories/card_filters.py`).
 
         Sem `query`: lista o catálogo em ordem alfabética — é o estado inicial
         da tela `/collection`'s' equivalente de catálogo e do `/api/v1/cards`
@@ -131,13 +141,14 @@ class CardRepository:
         """
         if query and query.strip():
             # Um pouco mais que `limit` para sobrar candidato depois do
-            # filtro de set opcional.
-            ids = self._matching_ids(query, limit=limit + offset + 50)
+            # filtro de set/atributos opcional.
+            ids = self._matching_ids(query, limit=limit + offset + 50, language=lang)
             if not ids:
                 return []
             stmt = select(Card).where(Card.id.in_(ids))
             if set_prefix:
                 stmt = stmt.join(CardPrint).where(CardPrint.set_prefix == set_prefix.upper())
+            stmt = apply_card_attribute_filters(stmt, filters)
             found = {card.id: card for card in self.session.scalars(stmt.distinct())}
             ordered = [found[card_id] for card_id in ids if card_id in found]
             return ordered[offset : offset + limit]
@@ -150,28 +161,66 @@ class CardRepository:
             )
         if set_prefix:
             stmt = stmt.join(CardPrint).where(CardPrint.set_prefix == set_prefix.upper())
+        stmt = apply_card_attribute_filters(stmt, filters)
         stmt = stmt.distinct().offset(offset).limit(limit)
         return list(self.session.scalars(stmt))
 
-    def count(self, query: str | None = None, *, set_prefix: str | None = None) -> int:
+    def count(
+        self,
+        query: str | None = None,
+        *,
+        set_prefix: str | None = None,
+        filters: CardAttributeFilters | None = None,
+        lang: str = "EN",
+    ) -> int:
         """Total de cartas que `search()` encontraria, para paginação.
 
         Com `query`: conta dentro do mesmo teto de candidatos que `search()`
         usa (`_SEARCH_FETCH_CAP`) — resultado de busca textual não precisa de
         contagem exata além disso (ver docstring do teto). Sem `query`
         (navegação alfabética do catálogo inteiro): conta de verdade, é uma
-        soma barata com os índices existentes.
+        soma barata com os índices existentes. `lang`/`filters` precisam
+        bater com o que `search()` recebe — senão a paginação conta
+        candidatos diferentes dos que a página lista.
         """
         if query and query.strip():
-            ids = self._matching_ids(query, limit=_SEARCH_FETCH_CAP)
+            ids = self._matching_ids(query, limit=_SEARCH_FETCH_CAP, language=lang)
             if not ids:
                 return 0
             stmt = select(func.count(func.distinct(Card.id))).where(Card.id.in_(ids))
             if set_prefix:
                 stmt = stmt.join(CardPrint).where(CardPrint.set_prefix == set_prefix.upper())
+            stmt = apply_card_attribute_filters(stmt, filters)
             return int(self.session.scalar(stmt) or 0)
 
         stmt = select(func.count(func.distinct(Card.id)))
         if set_prefix:
             stmt = stmt.join(CardPrint).where(CardPrint.set_prefix == set_prefix.upper())
+        stmt = apply_card_attribute_filters(stmt, filters)
         return int(self.session.scalar(stmt) or 0)
+
+    def filter_options(self) -> dict[str, list[str]]:
+        """Valores distintos de Tipo/Atributo/Race hoje no catálogo, para
+        popular os `<select>` do painel de filtros avançados — em vez de uma
+        lista fixa em Python, que ficaria desatualizada a cada `sync` que
+        trouxer um valor novo da API."""
+        types = self.session.scalars(
+            select(Card.type).where(Card.type.is_not(None)).distinct().order_by(Card.type)
+        ).all()
+        attributes = self.session.scalars(
+            select(Card.attribute)
+            .where(Card.attribute.is_not(None))
+            .distinct()
+            .order_by(Card.attribute)
+        ).all()
+        races = self.session.scalars(
+            select(Card.race).where(Card.race.is_not(None)).distinct().order_by(Card.race)
+        ).all()
+        # `.is_not(None)` já garante nenhum `None` em runtime — o `[v for v in
+        # ... if v is not None]` é só para o mypy, que não enxerga a WHERE
+        # clause (as colunas são `Mapped[str | None]`).
+        return {
+            "types": [v for v in types if v is not None],
+            "attributes": [v for v in attributes if v is not None],
+            "races": [v for v in races if v is not None],
+        }

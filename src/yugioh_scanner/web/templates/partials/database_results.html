@@ -3,23 +3,12 @@
   &mdash; {{ t('common.page_of', page=filters.page, total_pages=total_pages) }}
 </p>
 
-{% if filters.view == "gallery" %}
+{% if filters.view == "binder" %}
+{% include "partials/database_binder.html" %}
+{% elif filters.view == "gallery" %}
 {% include "partials/database_gallery.html" %}
 {% else %}
 {% include "partials/database_rows.html" %}
 {% endif %}
 
-<nav class="pagination">
-  <span>
-    {% if filters.page > 1 %}
-    <a href="#" hx-get="/cards/rows?q={{ (filters.search or '') | urlencode }}&set={{ (filters.set_prefix or '') | urlencode }}&view={{ filters.view }}&lang={{ filters.lang }}&page={{ filters.page - 1 }}"
-       hx-target="#db-results" hx-push-url="true">&larr; {{ t('database.previous') }}</a>
-    {% endif %}
-  </span>
-  <span>
-    {% if filters.page < total_pages %}
-    <a href="#" hx-get="/cards/rows?q={{ (filters.search or '') | urlencode }}&set={{ (filters.set_prefix or '') | urlencode }}&view={{ filters.view }}&lang={{ filters.lang }}&page={{ filters.page + 1 }}"
-       hx-target="#db-results" hx-push-url="true">{{ t('database.next') }} &rarr;</a>
-    {% endif %}
-  </span>
-</nav>
+{% include "partials/pagination_nav.html" %}

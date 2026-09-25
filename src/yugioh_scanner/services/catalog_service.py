@@ -21,6 +21,7 @@ from sqlalchemy.orm import Session
 
 from ..db.tables import ALT_NAME_LANGUAGES, Card, CardAltName, CardPrint, CardSet
 from ..errors import CardNotFoundError, InvalidSetDataError, SetAlreadyExistsError
+from ..repositories.card_filters import CardAttributeFilters
 from ..repositories.cards import CardRepository
 from ..repositories.sets import SetRepository
 
@@ -77,13 +78,20 @@ class CatalogService:
         query: str | None = None,
         *,
         set_prefix: str | None = None,
+        filters: CardAttributeFilters | None = None,
         limit: int = 50,
         offset: int = 0,
         locale: str = "EN",
         lang: str = "EN",
     ) -> list[Card]:
         return self.cards.search(
-            query, set_prefix=set_prefix, limit=limit, offset=offset, locale=locale, lang=lang
+            query,
+            set_prefix=set_prefix,
+            filters=filters,
+            limit=limit,
+            offset=offset,
+            locale=locale,
+            lang=lang,
         )
 
     def get_card(self, card_id: int) -> Card:
@@ -92,8 +100,18 @@ class CatalogService:
             raise CardNotFoundError(f"Carta #{card_id} não encontrada no catálogo.")
         return card
 
-    def count_cards(self, query: str | None = None, *, set_prefix: str | None = None) -> int:
-        return self.cards.count(query, set_prefix=set_prefix)
+    def count_cards(
+        self,
+        query: str | None = None,
+        *,
+        set_prefix: str | None = None,
+        filters: CardAttributeFilters | None = None,
+        lang: str = "EN",
+    ) -> int:
+        return self.cards.count(query, set_prefix=set_prefix, filters=filters, lang=lang)
+
+    def filter_options(self) -> dict[str, list[str]]:
+        return self.cards.filter_options()
 
     def prints_for_card(self, card_id: int, *, query: str | None = None) -> list[CardPrint]:
         return self.cards.prints_for(card_id, query=query)

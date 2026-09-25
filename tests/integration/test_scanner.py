@@ -7,6 +7,7 @@ grosso da lógica do scanner — sem depender de OCR real.
 
 from __future__ import annotations
 
+import time
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -166,6 +167,71 @@ class TestExecutors:
             produced.append(outcome)
             stopped["value"] = True
         assert len(produced) < 3
+
+
+class TestHeartbeat:
+    """Uma foto de grade processa todas as células numa `Future` só (o
+    fan-out acontece dentro do worker, `worker.py::process_task`) — sem
+    resultado parcial, o pool fica mudo até a foto inteira terminar. O
+    `on_heartbeat` existe para a Web avisar "ainda processando" nesse
+    silêncio (achado real do usuário: log parecia travado numa grade
+    lenta)."""
+
+    def test_fires_while_a_slow_task_is_still_in_flight(
+        self, cards_folder: Path, settings: Settings
+    ) -> None:
+        class SlowProvider(FakeOCRProvider):
+            def read(self, request: OCRRequest) -> OCRResult:
+                time.sleep(0.15)
+                return super().read(request)
+
+        provider = SlowProvider(default={"name": "X"})
+        executor = ThreadPoolScanExecutor(provider, settings, workers=1)
+        heartbeats: list[list[str]] = []
+
+        outcomes = list(
+            executor.map(
+                tasks_for(cards_folder),
+                on_heartbeat=lambda tasks: heartbeats.append([t.path.name for t in tasks]),
+                heartbeat_interval=0.05,
+            )
+        )
+
+        assert len(outcomes) == 3
+        assert heartbeats, "esperava ao menos um pulso enquanto a 1ª tarefa lenta ainda rodava"
+        # `workers=1` mas a janela de submissão é `workers * 2` (2 tarefas
+        # enfileiradas mesmo com só 1 thread ativa) — o pulso reporta tudo
+        # que já foi submetido e ainda não terminou, não só o que está de
+        # fato rodando agora.
+        assert "IMG_001.jpg" in heartbeats[0]
+
+    def test_never_fires_once_everything_is_already_done(
+        self, cards_folder: Path, settings: Settings
+    ) -> None:
+        """Provider rápido (sem `sleep`): nada fica pendente tempo o
+        bastante pro timeout do pulso bater."""
+        provider = FakeOCRProvider(default={"name": "X"})
+        executor = ThreadPoolScanExecutor(provider, settings, workers=3)
+        heartbeats: list[list[str]] = []
+
+        list(
+            executor.map(
+                tasks_for(cards_folder),
+                on_heartbeat=lambda tasks: heartbeats.append([t.path.name for t in tasks]),
+                heartbeat_interval=5.0,
+            )
+        )
+
+        assert heartbeats == []
+
+    def test_without_on_heartbeat_behaves_exactly_like_before(
+        self, cards_folder: Path, settings: Settings
+    ) -> None:
+        """Sem `on_heartbeat`, o `wait()` continua bloqueando sem prazo —
+        mesmo comportamento de antes desta feature existir."""
+        provider = FakeOCRProvider(default={"name": "X"})
+        executor = ThreadPoolScanExecutor(provider, settings, workers=3)
+        assert len(list(executor.map(tasks_for(cards_folder)))) == 3
 
 
 class TestExecutorSelection:

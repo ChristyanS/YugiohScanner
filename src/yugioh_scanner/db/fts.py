@@ -97,20 +97,37 @@ def search_card_ids(session: Session, query: str, *, limit: int = 50) -> list[in
 ALT_FTS_TABLE = "card_alt_fts"
 
 
-def search_alt_card_ids(session: Session, query: str, *, limit: int = 50) -> list[int]:
+def search_alt_card_ids(
+    session: Session, query: str, *, limit: int = 50, language: str | None = None
+) -> list[int]:
     """IDs de carta (não rowid — `card_alt_fts` guarda `card_id` à parte,
     porque seu rowid é o de `card_alt_name`, não o da carta) que casam com o
     texto via nome alternativo, ordenados por relevância (bm25).
+
+    `language`, quando informado, restringe o casamento ao idioma escolhido
+    pela tela — sem isto, escolher "exibir em PT" ainda deixava a busca
+    casar nome em qualquer um dos 7 idiomas sincronizados (achado real do
+    usuário). `card_alt_fts` não guarda o idioma (plano §7.1: conteúdo
+    próprio, só `name_normalized`/`card_id`), então o filtro faz um JOIN de
+    volta em `card_alt_name` pelo mesmo rowid (`card_alt_fts.rowid ==
+    card_alt_name.id`, ver migração 0003) em vez de mudar o schema da FTS.
     """
     safe = sanitize_fts_query(query)
     if not safe:
         return []
+    # `{ALT_FTS_TABLE}` sem alias de propósito: SQLite FTS5 só reconhece o
+    # MATCH "linha inteira" pelo nome real da tabela virtual (é assim que o
+    # código original já funcionava); aliasar (`AS fts` + `fts MATCH :q`)
+    # quebra com "no such column: fts" assim que vira um JOIN.
+    lang_filter = "AND alt.language = :lang" if language else ""
     rows = session.execute(
         text(
-            f"SELECT card_id FROM {ALT_FTS_TABLE} "
-            f"WHERE {ALT_FTS_TABLE} MATCH :q ORDER BY bm25({ALT_FTS_TABLE}) LIMIT :limit"
+            f"SELECT alt.card_id FROM {ALT_FTS_TABLE} "
+            f"JOIN card_alt_name AS alt ON alt.id = {ALT_FTS_TABLE}.rowid "
+            f"WHERE {ALT_FTS_TABLE} MATCH :q {lang_filter} "
+            f"ORDER BY bm25({ALT_FTS_TABLE}) LIMIT :limit"
         ),
-        {"q": safe, "limit": limit},
+        {"q": safe, "limit": limit, **({"lang": language} if language else {})},
     ).scalars()
     return list(rows)
 

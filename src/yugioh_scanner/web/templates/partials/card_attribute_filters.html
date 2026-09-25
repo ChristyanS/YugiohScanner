@@ -1,0 +1,70 @@
+{#
+  Painel de filtros avançados (Tipo/Atributo/Race/Arquétipo/ATK/DEF/
+  Estrelas/Escala/Link) — reaproveitado por database.html, collection.html
+  e deck_editor.html (esse último não pré-preenche nada, a busca do Deck
+  Builder é só em JS contra `/api/v1/decks/{id}/search`, mas usa o mesmo
+  vocabulário de `<select>`s vindo de `filter_options`).
+
+  Quem inclui este partial precisa `{% set %}` antes:
+  - `filter_class`: classe CSS que o form da página escuta para disparar a
+    busca (`db-filter` em database.html, `filter` em collection.html,
+    `deck-filter` em deck_editor.html — lido em JS por lá, não por HTMX).
+  - `attrs`: a instância de `CardAttributeFilters` já resolvida da query
+    string atual (`filters.attrs` em database.html/collection.html), usada
+    só para pré-preencher os campos — `none` quando não há nada para
+    pré-preencher (deck_editor.html).
+#}
+{% set has_attrs = attrs is defined and attrs %}
+<div class="grid">
+  <select name="type" class="{{ filter_class }}">
+    <option value="">{{ t('filters.any_type_option') }}</option>
+    {% for value in filter_options.types %}
+    <option value="{{ value }}" {% if has_attrs and attrs.card_type == value %}selected{% endif %}>{{ value }}</option>
+    {% endfor %}
+  </select>
+  <select name="attribute" class="{{ filter_class }}">
+    <option value="">{{ t('filters.any_attribute_option') }}</option>
+    {% for value in filter_options.attributes %}
+    <option value="{{ value }}" {% if has_attrs and attrs.attribute == value %}selected{% endif %}>{{ value }}</option>
+    {% endfor %}
+  </select>
+  <select name="race" class="{{ filter_class }}">
+    <option value="">{{ t('filters.any_race_option') }}</option>
+    {% for value in filter_options.races %}
+    <option value="{{ value }}" {% if has_attrs and attrs.race == value %}selected{% endif %}>{{ value }}</option>
+    {% endfor %}
+  </select>
+  <input type="text" name="archetype" class="{{ filter_class }}" placeholder="{{ t('filters.archetype_placeholder') }}" value="{{ attrs.archetype if has_attrs and attrs.archetype else '' }}">
+</div>
+<div class="grid">
+  <label>{{ t('filters.atk_label') }}
+    <div class="filter-range">
+      <input type="number" name="atk_min" class="{{ filter_class }}" placeholder="{{ t('filters.min_placeholder') }}" value="{{ attrs.atk_min if has_attrs and attrs.atk_min is not none else '' }}">
+      <input type="number" name="atk_max" class="{{ filter_class }}" placeholder="{{ t('filters.max_placeholder') }}" value="{{ attrs.atk_max if has_attrs and attrs.atk_max is not none else '' }}">
+    </div>
+  </label>
+  <label>{{ t('filters.def_label') }}
+    <div class="filter-range">
+      <input type="number" name="def_min" class="{{ filter_class }}" placeholder="{{ t('filters.min_placeholder') }}" value="{{ attrs.def_min if has_attrs and attrs.def_min is not none else '' }}">
+      <input type="number" name="def_max" class="{{ filter_class }}" placeholder="{{ t('filters.max_placeholder') }}" value="{{ attrs.def_max if has_attrs and attrs.def_max is not none else '' }}">
+    </div>
+  </label>
+  <label>{{ t('filters.level_label') }}
+    <div class="filter-range">
+      <input type="number" name="level_min" class="{{ filter_class }}" placeholder="{{ t('filters.min_placeholder') }}" value="{{ attrs.level_min if has_attrs and attrs.level_min is not none else '' }}">
+      <input type="number" name="level_max" class="{{ filter_class }}" placeholder="{{ t('filters.max_placeholder') }}" value="{{ attrs.level_max if has_attrs and attrs.level_max is not none else '' }}">
+    </div>
+  </label>
+  <label>{{ t('filters.scale_label') }}
+    <div class="filter-range">
+      <input type="number" name="scale_min" class="{{ filter_class }}" placeholder="{{ t('filters.min_placeholder') }}" value="{{ attrs.scale_min if has_attrs and attrs.scale_min is not none else '' }}">
+      <input type="number" name="scale_max" class="{{ filter_class }}" placeholder="{{ t('filters.max_placeholder') }}" value="{{ attrs.scale_max if has_attrs and attrs.scale_max is not none else '' }}">
+    </div>
+  </label>
+  <label>{{ t('filters.link_label') }}
+    <div class="filter-range">
+      <input type="number" name="link_min" class="{{ filter_class }}" placeholder="{{ t('filters.min_placeholder') }}" value="{{ attrs.linkval_min if has_attrs and attrs.linkval_min is not none else '' }}">
+      <input type="number" name="link_max" class="{{ filter_class }}" placeholder="{{ t('filters.max_placeholder') }}" value="{{ attrs.linkval_max if has_attrs and attrs.linkval_max is not none else '' }}">
+    </div>
+  </label>
+</div>

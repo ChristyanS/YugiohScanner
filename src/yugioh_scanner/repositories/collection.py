@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from typing import Any, ClassVar
 
 from sqlalchemy import and_, delete, exists, func, or_, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, aliased
 
 from ..db.tables import (
     DEFAULT_CONDITION,
@@ -31,6 +31,7 @@ from ..db.tables import (
 )
 from ..domain.normalization import normalize_strict
 from ..errors import CollectionItemNotFoundError
+from .card_filters import CardAttributeFilters, apply_card_attribute_filters
 
 
 @dataclass(frozen=True, slots=True)
@@ -308,11 +309,90 @@ class CollectionRepository:
         "set": CardPrint.set_code_full,
     }
 
+    def _apply_list_filters(
+        self,
+        stmt: Any,
+        *,
+        search: str | None,
+        set_prefix: str | None,
+        filters: CardAttributeFilters | None,
+        no_set: bool,
+        no_rarity: bool,
+        lang: str,
+    ) -> Any:
+        """Cláusulas `WHERE` compartilhadas por `list_filtered` e
+        `count_filtered` — a paginação da visão fichário (§ tela Coleção)
+        precisa contar exatamente o mesmo conjunto que a listagem devolve,
+        senão "página X de Y" mente. `stmt` já precisa ter `Card`
+        (`.join(Card)`) e `CardPrint` (`.outerjoin(CollectionItem.card_print)`)
+        unidos — ver nota sobre ambiguidade do join em `list_filtered`.
+        """
+        if search:
+            # Multilíngue desde a Fase 3 do faseamento web: bate no nome
+            # canônico (inglês, sempre) e na tradução do idioma de exibição
+            # escolhido (`lang`) — quem tem a carta física naquele idioma
+            # pode digitar exatamente o que está impresso nela. Restrito a
+            # `lang` (em vez de qualquer um dos 7 idiomas sincronizados):
+            # sem isto, buscar com a coleção exibida em português também
+            # trazia cartas que só bateram o nome em outro idioma (achado
+            # real do usuário). Com `lang="EN"` o `exists()` nunca casa
+            # (não há linha `EN` em `card_alt_name`), preservando o
+            # comportamento de busca só no canônico. `EXISTS` em vez de
+            # `join`: uma carta com várias traduções não pode virar várias
+            # linhas na coleção só porque a busca casou. `aliased()`: quando
+            # `lang != "EN"` a ordenação por nome (mais abaixo) já faz um
+            # `outerjoin(CardAltName, ...)` na query externa — sem alias
+            # aqui, o SQLAlchemy autocorrelaciona esta subquery com aquele
+            # join (mesma classe mapeada, condição de correlação idêntica) e
+            # ela fica sem nenhuma tabela própria (`InvalidRequestError:
+            # ... returned no FROM clauses due to auto-correlation`).
+            term = normalize_strict(search)
+            search_alt_name = aliased(CardAltName)
+            alt_match = exists(
+                select(search_alt_name.id).where(
+                    search_alt_name.card_id == Card.id,
+                    search_alt_name.language == lang,
+                    search_alt_name.name_normalized.contains(term),
+                )
+            )
+            stmt = stmt.where(or_(Card.name_normalized.contains(term), alt_match))
+        if set_prefix:
+            stmt = stmt.where(CardPrint.set_prefix == set_prefix.strip().upper())
+        stmt = apply_card_attribute_filters(stmt, filters)
+        if no_set:
+            # `card_print_id IS NULL` sozinho também casa itens com set já
+            # identificado e só a raridade pendente (`set_code_full`
+            # preenchido — ver `CollectionItem.set_code_full_display`), que
+            # `/collection` já exibe com o set certo. "Sem set" tem que
+            # exigir os dois `NULL` juntos — achado real do usuário: cartas
+            # apareciam como "Sem Set" no filtro mesmo com o set visível na
+            # própria listagem.
+            stmt = stmt.where(
+                CollectionItem.card_print_id.is_(None),
+                CollectionItem.set_code_full.is_(None),
+            )
+        if no_rarity:
+            # Só faz sentido quando o set já é conhecido: ou o print está
+            # resolvido mas sem raridade catalogada, ou o print está
+            # pendente (`set_code_full` preenchido) e a raridade também.
+            stmt = stmt.where(
+                or_(
+                    and_(CollectionItem.card_print_id.is_not(None), CardPrint.rarity.is_(None)),
+                    and_(
+                        CollectionItem.card_print_id.is_(None),
+                        CollectionItem.set_code_full.is_not(None),
+                        CollectionItem.rarity.is_(None),
+                    ),
+                )
+            )
+        return stmt
+
     def list_filtered(
         self,
         *,
         search: str | None = None,
         set_prefix: str | None = None,
+        filters: CardAttributeFilters | None = None,
         no_set: bool = False,
         no_rarity: bool = False,
         sort: str = "name",
@@ -341,40 +421,15 @@ class CollectionRepository:
         # set, não o print que o item realmente tem. Usar a relação
         # (`CollectionItem.card_print`) força o caminho de FK certo.
         stmt = select(CollectionItem).join(Card).outerjoin(CollectionItem.card_print)
-
-        if search:
-            # Multilíngue desde a Fase 3 do faseamento web: bate tanto no nome
-            # canônico (inglês) quanto em qualquer tradução sincronizada
-            # (FR/DE/IT/PT) — quem tem a carta física em outro idioma pode
-            # digitar exatamente o que está impresso nela. `EXISTS` em vez de
-            # `join`: uma carta com 4 traduções não pode virar 4 linhas na
-            # coleção só porque a busca casou em mais de um idioma.
-            term = normalize_strict(search)
-            alt_match = exists(
-                select(CardAltName.id).where(
-                    CardAltName.card_id == Card.id,
-                    CardAltName.name_normalized.contains(term),
-                )
-            )
-            stmt = stmt.where(or_(Card.name_normalized.contains(term), alt_match))
-        if set_prefix:
-            stmt = stmt.where(CardPrint.set_prefix == set_prefix.strip().upper())
-        if no_set:
-            stmt = stmt.where(CollectionItem.card_print_id.is_(None))
-        if no_rarity:
-            # Só faz sentido quando o set já é conhecido: ou o print está
-            # resolvido mas sem raridade catalogada, ou o print está
-            # pendente (`set_code_full` preenchido) e a raridade também.
-            stmt = stmt.where(
-                or_(
-                    and_(CollectionItem.card_print_id.is_not(None), CardPrint.rarity.is_(None)),
-                    and_(
-                        CollectionItem.card_print_id.is_(None),
-                        CollectionItem.set_code_full.is_not(None),
-                        CollectionItem.rarity.is_(None),
-                    ),
-                )
-            )
+        stmt = self._apply_list_filters(
+            stmt,
+            search=search,
+            set_prefix=set_prefix,
+            filters=filters,
+            no_set=no_set,
+            no_rarity=no_rarity,
+            lang=lang,
+        )
 
         column = self.SORT_COLUMNS.get(sort, Card.name)
         if sort == "name":
@@ -397,3 +452,33 @@ class CollectionRepository:
             stmt = stmt.limit(limit).offset(offset)
 
         return list(self.session.scalars(stmt).unique())
+
+    def count_filtered(
+        self,
+        *,
+        search: str | None = None,
+        set_prefix: str | None = None,
+        filters: CardAttributeFilters | None = None,
+        no_set: bool = False,
+        no_rarity: bool = False,
+        lang: str = "EN",
+    ) -> int:
+        """Total de itens que `list_filtered` encontraria, para paginação —
+        a visão fichário (3x3) da Coleção precisa saber quantas "páginas"
+        existem antes de fatiar com `limit`/`offset`."""
+        stmt = (
+            select(func.count(CollectionItem.id))
+            .select_from(CollectionItem)
+            .join(Card)
+            .outerjoin(CollectionItem.card_print)
+        )
+        stmt = self._apply_list_filters(
+            stmt,
+            search=search,
+            set_prefix=set_prefix,
+            filters=filters,
+            no_set=no_set,
+            no_rarity=no_rarity,
+            lang=lang,
+        )
+        return int(self.session.scalar(stmt) or 0)

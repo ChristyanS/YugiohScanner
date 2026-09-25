@@ -22,6 +22,7 @@ from ..errors import (
 )
 from ..matching.candidates import CandidateFinder
 from ..matching.resolver import PrintResolver
+from ..repositories.card_filters import CardAttributeFilters
 from ..repositories.collection import CollectionKey, CollectionRepository
 
 #: Abaixo disso, um candidato não é bom o bastante para desambiguar sozinho.
@@ -67,7 +68,15 @@ class CollectionService:
         return CollectionStats(
             distinct_cards=len({item.card_id for item in items}),
             total_copies=sum(item.quantity for item in items),
-            items_without_print=sum(1 for item in items if item.card_print_id is None),
+            # Mesma correção de `CollectionRepository.list_filtered`
+            # (filtro `no_set`): um item com `set_code_full` preenchido já
+            # tem o set identificado, só a raridade está pendente — não
+            # conta como "sem set definido" no dashboard.
+            items_without_print=sum(
+                1
+                for item in items
+                if item.card_print_id is None and item.set_code_full is None
+            ),
             sets_represented=len(sets),
             items_without_rarity=sum(1 for item in items if item.rarity_display is None),
         )
@@ -77,6 +86,7 @@ class CollectionService:
         *,
         search: str | None = None,
         set_prefix: str | None = None,
+        filters: CardAttributeFilters | None = None,
         no_set: bool = False,
         no_rarity: bool = False,
         sort: str = "name",
@@ -89,6 +99,7 @@ class CollectionService:
         return self.repo.list_filtered(
             search=search,
             set_prefix=set_prefix,
+            filters=filters,
             no_set=no_set,
             no_rarity=no_rarity,
             sort=sort,
@@ -97,6 +108,27 @@ class CollectionService:
             offset=offset,
             lang=lang,
             locale=locale,
+        )
+
+    def count_items(
+        self,
+        *,
+        search: str | None = None,
+        set_prefix: str | None = None,
+        filters: CardAttributeFilters | None = None,
+        no_set: bool = False,
+        no_rarity: bool = False,
+        lang: str = "EN",
+    ) -> int:
+        """Total de itens que `list_items` encontraria com os mesmos
+        filtros — usado pela paginação da visão fichário."""
+        return self.repo.count_filtered(
+            search=search,
+            set_prefix=set_prefix,
+            filters=filters,
+            no_set=no_set,
+            no_rarity=no_rarity,
+            lang=lang,
         )
 
     def get_item(self, item_id: int) -> CollectionItem:

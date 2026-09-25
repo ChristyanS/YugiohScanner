@@ -10,12 +10,18 @@ banco (plano §2.3).
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
+from pathlib import Path
 
 from ..config import Settings
 from .discovery import DiscoveredImage
-from .executor import StopCheck, create_executor
+from .executor import DEFAULT_HEARTBEAT_INTERVAL_S, StopCheck, create_executor
 from .worker import ScanOutcome, ScanTask
+
+#: Chamado quando nenhuma foto termina dentro de `heartbeat_interval` — só
+#: os caminhos ainda em processamento, sem o tipo interno `ScanTask` (que é
+#: detalhe de `scanner/`, não precisa vazar para quem chama `run_pipeline`).
+HeartbeatCallback = Callable[[list[Path]], None]
 
 
 def run_pipeline(
@@ -27,6 +33,8 @@ def run_pipeline(
     should_stop: StopCheck | None = None,
     grid_mode: bool = False,
     grid_size: tuple[int, int] | None = None,
+    on_heartbeat: HeartbeatCallback | None = None,
+    heartbeat_interval: float = DEFAULT_HEARTBEAT_INTERVAL_S,
 ) -> Iterator[ScanOutcome]:
     """OCR em paralelo sobre as imagens já filtradas pelo chamador.
 
@@ -37,6 +45,13 @@ def run_pipeline(
     aqui — cada foto continua sendo uma `ScanTask` só. `grid_size`, quando
     informado, pula a detecção automática por contorno e divide cada foto em
     linhas×colunas fixas (`--grid-size`, ADR 0011).
+
+    `on_heartbeat`: uma foto de grade processa todas as células numa `Future`
+    só (limite do `concurrent.futures` — sem resultado parcial), então numa
+    grade lenta o chamador fica sem nenhum evento até a foto inteira acabar.
+    `on_heartbeat`, quando informado, é chamado a cada `heartbeat_interval`
+    segundos de silêncio com os arquivos ainda em voo, para quem consome
+    (Web) poder mostrar "ainda processando" em vez de parecer travado.
     """
     tasks = [
         ScanTask(path=image.path, file_hash=image.file_hash, size=image.size) for image in images
@@ -49,4 +64,11 @@ def run_pipeline(
         grid_mode=grid_mode,
         grid_size=grid_size,
     )
-    yield from executor.map(tasks)
+    heartbeat_adapter = (
+        (lambda pending: on_heartbeat([task.path for task in pending]))
+        if on_heartbeat is not None
+        else None
+    )
+    yield from executor.map(
+        tasks, on_heartbeat=heartbeat_adapter, heartbeat_interval=heartbeat_interval
+    )

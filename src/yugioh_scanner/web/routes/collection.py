@@ -8,6 +8,7 @@ mora aqui; só a tradução para fragmento de tabela.
 
 from __future__ import annotations
 
+import math
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Form, Request
@@ -20,30 +21,105 @@ from ...services.catalog_service import (
     resolve_display_language,
     sort_collation_for_language,
 )
+from ..card_filter_params import parse_card_attribute_filters
 from ..deps import CatalogServiceDep, CollectionServiceDep, SettingsServiceDep
 
 router = APIRouter(prefix="/collection")
 
+#: Tamanho de página da visão fichário (§ pedido do usuário): grade fixa
+#: 3x3, uma "folha" física de cada vez — não é ajustável como
+#: `_PAGE_SIZE_TABLE`/`_PAGE_SIZE_GALLERY` de `web/routes/cards.py` porque o
+#: layout em si (CSS grid 3 colunas) depende desse número exato.
+_PAGE_SIZE_BINDER = 9
+#: Teto de itens carregados fora da visão fichário — mantém o comportamento
+#: anterior (lista/galeria sem paginação, só um teto de segurança).
+_DEFAULT_LIST_LIMIT = 200
+
 
 def _filters(request: Request, *, default_lang: str) -> dict[str, Any]:
     q = request.query_params
+    try:
+        page = max(1, int(q.get("page", "1")))
+    except ValueError:
+        page = 1
     return {
         "search": q.get("search") or None,
         "set_prefix": q.get("set") or None,
+        "attrs": parse_card_attribute_filters(q),
         "no_set": q.get("no_set") in ("1", "true", "on"),
         "no_rarity": q.get("no_rarity") in ("1", "true", "on"),
         "sort": q.get("sort") or "name",
         "descending": q.get("desc") in ("1", "true", "on"),
-        "view": q.get("view") if q.get("view") in ("table", "gallery") else "table",
+        "view": q.get("view") if q.get("view") in ("table", "gallery", "binder") else "table",
         "lang": resolve_display_language(q.get("lang"), default=default_lang),
+        "page": page,
     }
 
 
 def _service_filters(filters: dict[str, Any]) -> dict[str, Any]:
-    """Só os filtros que `CollectionService.list_items` conhece — `view` e
-    `lang` são detalhe de apresentação da Web, não existem do lado do
-    serviço."""
-    return {k: v for k, v in filters.items() if k not in ("view", "lang")}
+    """Só os filtros que `CollectionService.list_items` conhece — `view`,
+    `lang` e `page` são detalhe de apresentação da Web, não existem do lado
+    do serviço; `attrs` vira o kwarg `filters` que o serviço espera."""
+    service = {k: v for k, v in filters.items() if k not in ("view", "lang", "attrs", "page")}
+    service["filters"] = filters["attrs"]
+    return service
+
+
+def _count_filters(filters: dict[str, Any]) -> dict[str, Any]:
+    """Só os filtros que `CollectionService.count_items` conhece — mesmo
+    conjunto que `list_filtered` usa no `WHERE`, sem ordenação/paginação."""
+    return {
+        "search": filters["search"],
+        "set_prefix": filters["set_prefix"],
+        "filters": filters["attrs"],
+        "no_set": filters["no_set"],
+        "no_rarity": filters["no_rarity"],
+        "lang": filters["lang"],
+    }
+
+
+def _load_collection_page(
+    request: Request,
+    collection: CollectionServiceDep,
+    catalog: CatalogServiceDep,
+    settings: SettingsServiceDep,
+) -> dict[str, Any]:
+    filters = _filters(request, default_lang=settings.get_default_card_language())
+    locale = sort_collation_for_language(filters["lang"])
+
+    total: int | None = None
+    total_pages: int | None = None
+    if filters["view"] == "binder":
+        # Folear o fichário exige saber quantas "folhas" existem — as
+        # outras visões (lista/galeria) nunca precisaram de contagem, só de
+        # um teto (`_DEFAULT_LIST_LIMIT`).
+        total = collection.count_items(**_count_filters(filters))
+        total_pages = max(1, math.ceil(total / _PAGE_SIZE_BINDER))
+        page = min(filters["page"], total_pages)
+        filters = {**filters, "page": page}
+        items = collection.list_items(
+            **_service_filters(filters),
+            limit=_PAGE_SIZE_BINDER,
+            offset=(page - 1) * _PAGE_SIZE_BINDER,
+            locale=locale,
+            lang=filters["lang"],
+        )
+    else:
+        items = collection.list_items(
+            **_service_filters(filters),
+            limit=_DEFAULT_LIST_LIMIT,
+            locale=locale,
+            lang=filters["lang"],
+        )
+
+    display_names = catalog.display_names([item.card for item in items], filters["lang"])
+    return {
+        "items": items,
+        "display_names": display_names,
+        "filters": filters,
+        "total": total,
+        "total_pages": total_pages,
+    }
 
 
 @router.get("", response_class=HTMLResponse)
@@ -53,26 +129,21 @@ def collection_page(
     catalog: CatalogServiceDep,
     settings: SettingsServiceDep,
 ) -> HTMLResponse:
-    filters = _filters(request, default_lang=settings.get_default_card_language())
-    items = collection.list_items(
-        **_service_filters(filters),
-        limit=200,
-        locale=sort_collation_for_language(filters["lang"]),
-        lang=filters["lang"],
-    )
-    display_names = catalog.display_names([item.card for item in items], filters["lang"])
+    context = _load_collection_page(request, collection, catalog, settings)
     templates = request.app.state.templates
     return templates.TemplateResponse(
         request,
         "collection.html",
         {
-            "items": items,
-            "display_names": display_names,
-            "filters": filters,
+            **context,
             "export_profiles": known_profiles("csv"),
             "languages": DISPLAY_LANGUAGES,
             "conditions": CONDITIONS,
             "editions": EDITIONS,
+            # Só a página cheia precisa das opções dos `<select>` — o form
+            # de filtros não é re-renderizado pelo swap parcial de
+            # `/collection/rows`.
+            "filter_options": catalog.filter_options(),
         },
     )
 
@@ -84,19 +155,11 @@ def collection_rows(
     catalog: CatalogServiceDep,
     settings: SettingsServiceDep,
 ) -> HTMLResponse:
-    filters = _filters(request, default_lang=settings.get_default_card_language())
-    items = collection.list_items(
-        **_service_filters(filters),
-        limit=200,
-        locale=sort_collation_for_language(filters["lang"]),
-        lang=filters["lang"],
-    )
-    display_names = catalog.display_names([item.card for item in items], filters["lang"])
     templates = request.app.state.templates
     return templates.TemplateResponse(
         request,
         "partials/collection_results.html",
-        {"items": items, "display_names": display_names, "filters": filters},
+        _load_collection_page(request, collection, catalog, settings),
     )
 
 
@@ -212,10 +275,10 @@ def clear_collection(
     settings: SettingsServiceDep,
 ) -> HTMLResponse:
     collection.clear_all()
-    filters = _filters(request, default_lang=settings.get_default_card_language())
+    filters = {**_filters(request, default_lang=settings.get_default_card_language()), "page": 1}
     templates = request.app.state.templates
     return templates.TemplateResponse(
         request,
         "partials/collection_results.html",
-        {"items": [], "display_names": {}, "filters": filters},
+        {"items": [], "display_names": {}, "filters": filters, "total": 0, "total_pages": 1},
     )

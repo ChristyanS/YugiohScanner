@@ -43,13 +43,32 @@ log = get_logger(__name__)
 #: Chamado para saber se o job foi cancelado (a UI web usa isso).
 StopCheck = Callable[[], bool]
 
+#: Chamado quando nenhuma tarefa terminou dentro de `heartbeat_interval` —
+#: recebe as tarefas ainda em voo. Existe só para a Web mostrar "ainda
+#: processando" numa foto de grade lenta (várias cartas por foto, plano
+#: §22): o pool só devolve resultado quando a `Future` inteira termina (nunca
+#: parcial, é limite do `concurrent.futures`), então sem isto o log fica em
+#: silêncio total enquanto uma foto de 9 células é lida.
+HeartbeatCallback = Callable[[list[ScanTask]], None]
+
+#: Intervalo padrão entre pulsos — curto o bastante para não parecer travado
+#: numa foto de grade lenta, longo o bastante para não virar spam numa foto
+#: rápida de carta única (que quase nunca dispara heartbeat nenhum).
+DEFAULT_HEARTBEAT_INTERVAL_S = 2.0
+
 
 class ScanExecutor(Protocol):
     """Recebe tarefas, devolve resultados conforme ficam prontos."""
 
     workers: int
 
-    def map(self, tasks: Sequence[ScanTask]) -> Iterator[ScanOutcome]: ...
+    def map(
+        self,
+        tasks: Sequence[ScanTask],
+        *,
+        on_heartbeat: HeartbeatCallback | None = None,
+        heartbeat_interval: float = DEFAULT_HEARTBEAT_INTERVAL_S,
+    ) -> Iterator[ScanOutcome]: ...
 
     def shutdown(self) -> None: ...
 
@@ -78,7 +97,20 @@ class SerialScanExecutor:
         self._grid_mode = grid_mode
         self._grid_size = grid_size
 
-    def map(self, tasks: Sequence[ScanTask]) -> Iterator[ScanOutcome]:
+    def map(
+        self,
+        tasks: Sequence[ScanTask],
+        *,
+        on_heartbeat: HeartbeatCallback | None = None,
+        heartbeat_interval: float = DEFAULT_HEARTBEAT_INTERVAL_S,
+    ) -> Iterator[ScanOutcome]:
+        # `on_heartbeat`/`heartbeat_interval` só existem para o protocolo
+        # bater com `PoolScanExecutor` — sem paralelismo não há como avisar
+        # "ainda processando" no meio de uma tarefa (é a mesma limitação do
+        # pool, só que sem outras tarefas concorrentes para dar timeout
+        # contra elas). `--workers 1` já é o caminho de debug/teste (ver
+        # docstring da classe); aceitar e não usar é o comportamento certo.
+        del on_heartbeat, heartbeat_interval
         set_provider(
             self._provider, self._settings, grid_mode=self._grid_mode, grid_size=self._grid_size
         )
@@ -117,14 +149,29 @@ class PoolScanExecutor:
     def _create_executor(self) -> Executor:  # pragma: no cover - abstrato
         raise NotImplementedError
 
-    def map(self, tasks: Sequence[ScanTask]) -> Iterator[ScanOutcome]:
+    def map(
+        self,
+        tasks: Sequence[ScanTask],
+        *,
+        on_heartbeat: HeartbeatCallback | None = None,
+        heartbeat_interval: float = DEFAULT_HEARTBEAT_INTERVAL_S,
+    ) -> Iterator[ScanOutcome]:
         if not tasks:
             return
 
         self._executor = self._create_executor()
         pending: set[Future[ScanOutcome]] = set()
+        # Só para o heartbeat saber QUAIS arquivos estão em voo quando o
+        # timeout bate sem nenhuma `Future` pronta — `wait()` devolve só as
+        # próprias `Future`s, sem essa associação.
+        task_by_future: dict[Future[ScanOutcome], ScanTask] = {}
         queue = iter(tasks)
         window = self.workers * 2
+        # Sem `on_heartbeat`, mantém o `wait()` bloqueando para sempre (como
+        # antes desta mudança) — só entra em modo "acorda de N em N segundos
+        # pra checar" quando alguém pediu o pulso; ninguém observa diferença
+        # nenhuma se não passar `on_heartbeat`.
+        wait_timeout = heartbeat_interval if on_heartbeat is not None else None
 
         try:
             while True:
@@ -132,13 +179,25 @@ class PoolScanExecutor:
                     task = next(queue, None)
                     if task is None:
                         break
-                    pending.add(self._executor.submit(process_task, task))
+                    future = self._executor.submit(process_task, task)
+                    pending.add(future)
+                    task_by_future[future] = task
 
                 if not pending:
                     return
 
-                done, pending = wait(pending, return_when=FIRST_COMPLETED)
+                done, pending = wait(pending, timeout=wait_timeout, return_when=FIRST_COMPLETED)
+                if not done:
+                    # Só acontece com `wait_timeout` setado, ou seja, só
+                    # quando `on_heartbeat` não é `None` — o pool inteiro
+                    # ainda está processando a(s) foto(s) em voo (grade
+                    # lenta, várias células numa `Future` só) sem nenhuma
+                    # terminar ainda; avisa quais arquivos são essas.
+                    if on_heartbeat is not None:
+                        on_heartbeat([task_by_future[f] for f in pending])
+                    continue
                 for future in done:
+                    task_by_future.pop(future, None)
                     yield future.result()
 
                 if self._should_stop is not None and self._should_stop():

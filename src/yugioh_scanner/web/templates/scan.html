@@ -323,7 +323,7 @@ async function runScan() {
   scanLog.innerHTML = "";
 
   const source = new EventSource(`/api/v1/scans/live/${payload.run_id}/events`);
-  let processed = 0, autoAdded = 0, pending = 0, failed = 0, skipped = 0;
+  let processed = 0, autoAdded = 0, pending = 0, failed = 0, skipped = 0, photosDone = 0;
 
   source.addEventListener("image", (ev) => {
     const data = JSON.parse(ev.data);
@@ -343,9 +343,40 @@ async function runScan() {
       else pending++;
       logLine(`${label}: ${data.name || data.ocr_name || "?"} [${data.decision || data.status}]`);
     }
+    // `total` vem em todo evento (mesmo valor, igual a `report.total_images`
+    // no servidor) e conta FOTOS, não cartas — uma foto de grade (--grid)
+    // rende `crop_count` eventos (um por carta), todos com o mesmo `file` e
+    // o mesmo `total`. Contar "concluído" por evento (como antes) misturava
+    // as duas unidades: numa grade 3x3, 1 foto processada já disparava 9
+    // eventos, estourando `total` e deixando "faltam" errado/negativo desde
+    // a primeira foto (achado real do usuário). Uma foto só conta como
+    // concluída no seu ÚLTIMO recorte (`crop_index === crop_count - 1`) —
+    // essa condição também cobre o caso de sempre (`crop_count === 1`, um
+    // evento = uma foto), então funciona igual com ou sem grade.
+    if (data.crop_index === data.crop_count - 1) photosDone++;
+    const total = data.total || 0;
+    if (total > 0) {
+      progressBar.max = total;
+      progressBar.value = photosDone;
+    }
     progressCounts.textContent = t("scan.progress_counts", {
       processed, auto: autoAdded, pending, failed, skipped,
+      remaining: Math.max(0, total - photosDone), total,
     });
+  });
+
+  // Pulso emitido quando nenhuma foto termina por alguns segundos — uma
+  // foto de grade (--grid) OCR'a todas as células antes de devolver
+  // qualquer resultado (limite do pool de processos: uma `Future` só
+  // devolve tudo de uma vez, nunca parcial), então sem isto o log ficava em
+  // silêncio total durante uma grade lenta, parecendo travado (achado real
+  // do usuário). Não conta como progresso — só reforça que o scan continua
+  // rodando.
+  source.addEventListener("heartbeat", (ev) => {
+    const data = JSON.parse(ev.data);
+    if (data.files && data.files.length) {
+      logLine(t("scan.heartbeat", { files: data.files.join(", ") }));
+    }
   });
 
   source.addEventListener("done", (ev) => {

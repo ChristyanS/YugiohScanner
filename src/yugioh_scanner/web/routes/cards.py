@@ -21,6 +21,7 @@ from ...services.catalog_service import (
     resolve_display_language,
     sort_collation_for_language,
 )
+from ..card_filter_params import parse_card_attribute_filters
 from ..deps import CatalogServiceDep, CollectionServiceDep, SettingsServiceDep
 
 router = APIRouter()
@@ -31,11 +32,15 @@ router = APIRouter()
 #: `auto-fill` comum (múltiplos de 6/8) sem depender da largura da tela.
 _PAGE_SIZE_TABLE = 60
 _PAGE_SIZE_GALLERY = 48
+#: Visão fichário (§ pedido do usuário): grade fixa 3x3, uma "folha" física
+#: de cada vez — o número não é escolha de gosto como os dois de cima, é o
+#: próprio layout (CSS grid 3 colunas) que depende dele.
+_PAGE_SIZE_BINDER = 9
 
 
 def _database_filters(request: Request, *, default_lang: str) -> dict[str, Any]:
     q = request.query_params
-    view = q.get("view") if q.get("view") in ("table", "gallery") else "table"
+    view = q.get("view") if q.get("view") in ("table", "gallery", "binder") else "table"
     try:
         page = max(1, int(q.get("page", "1")))
     except ValueError:
@@ -43,6 +48,7 @@ def _database_filters(request: Request, *, default_lang: str) -> dict[str, Any]:
     return {
         "search": q.get("q") or None,
         "set_prefix": q.get("set") or None,
+        "attrs": parse_card_attribute_filters(q),
         "view": view,
         "page": page,
         "lang": resolve_display_language(q.get("lang"), default=default_lang),
@@ -53,15 +59,31 @@ def _load_database_page(
     request: Request, catalog: CatalogServiceDep, settings: SettingsServiceDep
 ) -> dict[str, Any]:
     filters = _database_filters(request, default_lang=settings.get_default_card_language())
-    page_size = _PAGE_SIZE_GALLERY if filters["view"] == "gallery" else _PAGE_SIZE_TABLE
+    # `if`/`elif` em vez de um dict de módulo: um dict montado uma vez no
+    # import congelaria o valor de `_PAGE_SIZE_GALLERY`/`_PAGE_SIZE_BINDER`
+    # daquele momento, e os testes de paginação fazem `monkeypatch.setattr`
+    # nessas constantes para forçar poucas páginas sem precisar de massa de
+    # dados — precisam ser lidas do módulo a cada chamada.
+    if filters["view"] == "gallery":
+        page_size = _PAGE_SIZE_GALLERY
+    elif filters["view"] == "binder":
+        page_size = _PAGE_SIZE_BINDER
+    else:
+        page_size = _PAGE_SIZE_TABLE
 
-    total = catalog.count_cards(filters["search"], set_prefix=filters["set_prefix"])
+    total = catalog.count_cards(
+        filters["search"],
+        set_prefix=filters["set_prefix"],
+        filters=filters["attrs"],
+        lang=filters["lang"],
+    )
     total_pages = max(1, math.ceil(total / page_size))
     page = min(filters["page"], total_pages)
 
     cards = catalog.search_cards(
         filters["search"],
         set_prefix=filters["set_prefix"],
+        filters=filters["attrs"],
         limit=page_size,
         offset=(page - 1) * page_size,
         locale=sort_collation_for_language(filters["lang"]),
@@ -84,6 +106,9 @@ def database_page(
 ) -> HTMLResponse:
     templates = request.app.state.templates
     context = _load_database_page(request, catalog, settings)
+    # Só a página cheia precisa das opções dos `<select>` — o form com os
+    # filtros não é re-renderizado pelo swap parcial de `/cards/rows`.
+    context["filter_options"] = catalog.filter_options()
     return templates.TemplateResponse(request, "database.html", context)
 
 

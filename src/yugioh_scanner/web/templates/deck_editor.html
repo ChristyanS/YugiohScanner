@@ -52,6 +52,12 @@
   <div class="deck-pool">
     <h3>{{ t('deck_editor.search_heading') }}</h3>
     <input type="search" id="deck-search-input" placeholder="{{ t('review.manual_search_placeholder') }}">
+    <details id="deck-filters">
+      <summary>{{ t('filters.advanced_summary') }}</summary>
+      {% set filter_class = "deck-filter" %}
+      {% set attrs = none %}
+      {% include "partials/card_attribute_filters.html" %}
+    </details>
     <div id="deck-pool-grid" class="deck-pool-grid"></div>
     <div class="deck-pool-pagination">
       <button type="button" id="pool-prev" class="outline" disabled>{{ t('database.previous') }}</button>
@@ -71,6 +77,7 @@ const saveNameButton = document.getElementById("save-name-button");
 const legalityPanel = document.getElementById("legality-panel");
 const detailPanel = document.getElementById("deck-detail-panel");
 const searchInput = document.getElementById("deck-search-input");
+const deckFilters = document.getElementById("deck-filters");
 const poolGrid = document.getElementById("deck-pool-grid");
 const poolPrevButton = document.getElementById("pool-prev");
 const poolNextButton = document.getElementById("pool-next");
@@ -141,14 +148,38 @@ function renderDetail(card) {
     ? "" : `<p><strong>${t("card_detail.atk_def_label")}</strong> ${card.atk}/${card.def}${levelText}</p>`;
   const archetypeText = card.archetype
     ? `<p><strong>${t("card_detail.archetype_label")}</strong> ${card.archetype}</p>` : "";
+  const isCover = deck && deck.cover_card_id === card.id;
   detailPanel.innerHTML = `
     <img src="/api/v1/cards/${card.id}/image?size=full" alt="${card.name}">
     <h4>${card.name}</h4>
+    <button type="button" id="set-cover-button" class="outline secondary" ${isCover ? "disabled" : ""}>
+      ${isCover ? t("deck_editor.is_cover_label") : t("deck_editor.set_cover_button")}
+    </button>
     <p><strong>${t("card_detail.type_label")}</strong> ${card.type}${attributeText}</p>
     ${atkDef}
     ${archetypeText}
     <p>${card.desc || ""}</p>
   `;
+  const coverButton = document.getElementById("set-cover-button");
+  if (coverButton && !isCover) {
+    coverButton.addEventListener("click", () => setCover(card.id));
+  }
+}
+
+// Backend já suportava `cover_card_id` (`DeckService.set_cover`, `PUT
+// /api/v1/decks/{id}`) — só faltava um jeito de escolher a capa na tela;
+// a listagem em galeria de `decks.html` é quem de fato usa esse valor.
+async function setCover(cardId) {
+  const res = await fetch(`/api/v1/decks/${deckId}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ cover_card_id: cardId }),
+  });
+  const payload = await res.json();
+  if (!res.ok) { showError(payload.error || t("deck_editor.set_cover_failed")); return; }
+  deck.cover_card_id = payload.cover_card_id;
+  showError("");
+  renderDetail(await fetchCard(cardId));
 }
 
 async function selectDetail(cardId) {
@@ -340,13 +371,27 @@ function makePoolCard(card) {
   return wrap;
 }
 
+// Mesmos campos de `partials/card_attribute_filters.html`, lidos por `name`
+// dentro de `#deck-filters` (não por `id` — o partial não gera um por
+// campo, é reaproveitado tal-qual de database.html/collection.html).
+function poolFilterParams() {
+  const params = new URLSearchParams();
+  for (const el of deckFilters.querySelectorAll("[name]")) {
+    if (el.value) params.set(el.name, el.value);
+  }
+  return params;
+}
+
 // Painel de navegação/busca (plano do Deck Builder §5): já respeita
 // `collection_only`/`full_db` sozinho, porque `DeckService.searchable_pool`
 // filtra por `build_mode` no servidor — nada a decidir aqui no cliente.
 async function runPoolSearch(resetOffset) {
   if (resetOffset) poolOffset = 0;
-  const q = encodeURIComponent(searchInput.value || "");
-  const res = await fetch(`/api/v1/decks/${deckId}/search?q=${q}&limit=${POOL_PAGE_SIZE}&offset=${poolOffset}`);
+  const params = poolFilterParams();
+  params.set("q", searchInput.value || "");
+  params.set("limit", POOL_PAGE_SIZE);
+  params.set("offset", poolOffset);
+  const res = await fetch(`/api/v1/decks/${deckId}/search?${params.toString()}`);
   const cards = await res.json();
   cards.forEach((card) => cardCache.set(card.id, card));
   poolGrid.innerHTML = "";
@@ -364,6 +409,7 @@ searchInput.addEventListener("input", () => {
   clearTimeout(searchTimer);
   searchTimer = setTimeout(() => runPoolSearch(true), 250);
 });
+deckFilters.addEventListener("change", () => runPoolSearch(true));
 
 poolPrevButton.addEventListener("click", () => {
   poolOffset = Math.max(0, poolOffset - POOL_PAGE_SIZE);

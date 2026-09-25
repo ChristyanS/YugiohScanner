@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 
 from ..db.tables import Card, Deck, DeckCard
 from ..errors import DeckNotFoundError, DeckValidationError
+from ..repositories.card_filters import CardAttributeFilters
 from ..repositories.collection import CollectionRepository
 from ..repositories.decks import DeckRepository
 from .catalog_service import CatalogService
@@ -195,11 +196,22 @@ class DeckService:
         )
 
     def searchable_pool(
-        self, deck: Deck, query: str | None, *, limit: int = 50, offset: int = 0
+        self,
+        deck: Deck,
+        query: str | None,
+        *,
+        filters: CardAttributeFilters | None = None,
+        lang: str = "EN",
+        limit: int = 50,
+        offset: int = 0,
     ) -> list[Card]:
         """Pool de cartas elegíveis para adicionar ao deck: só a coleção do
         usuário, ou o catálogo inteiro — reaproveita a busca já existente em
-        cada caso, não duplica lógica de busca."""
+        cada caso, não duplica lógica de busca. `filters` são os mesmos
+        filtros avançados (Tipo/Atributo/Race/Arquétipo/ATK/DEF/Estrelas/
+        Escala/Link) do Banco de Dados e da Coleção
+        (`repositories/card_filters.py`); `lang` é o mesmo idioma de busca
+        multilíngue (ver docstring de `CollectionRepository.list_filtered`)."""
         if deck.build_mode == "collection_only":
             # `limit`/`offset` aqui contam CARTAS únicas, não linhas de
             # `CollectionItem` — uma carta com 2+ linhas (prints/condições/
@@ -211,7 +223,7 @@ class DeckService:
             # Por isso busca TODAS as linhas que casam o filtro (sem
             # limit/offset — mesmo padrão de `ExportService.build_rows`),
             # dedupe para cartas únicas, e só então corta a página.
-            items = self.collection_repo.list_filtered(search=query)
+            items = self.collection_repo.list_filtered(search=query, filters=filters, lang=lang)
             seen: set[int] = set()
             cards: list[Card] = []
             for item in items:
@@ -219,7 +231,9 @@ class DeckService:
                     seen.add(item.card_id)
                     cards.append(item.card)
             return cards[offset : offset + limit]
-        return self.catalog.search_cards(query, limit=limit, offset=offset)
+        return self.catalog.search_cards(
+            query, filters=filters, lang=lang, limit=limit, offset=offset
+        )
 
     def remaining_copies(self, deck: Deck, card: Card) -> int:
         """No modo `collection_only`, quantas cópias possuídas de `card` ainda

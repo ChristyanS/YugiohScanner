@@ -21,6 +21,7 @@
     <select name="view" class="filter">
       <option value="table" {% if filters.view == "table" %}selected{% endif %}>{{ t('collection.view_list') }}</option>
       <option value="gallery" {% if filters.view == "gallery" %}selected{% endif %}>{{ t('collection.view_gallery') }}</option>
+      <option value="binder" {% if filters.view == "binder" %}selected{% endif %}>{{ t('collection.view_binder') }}</option>
     </select>
     <select name="lang" class="filter" title="{{ t('collection.display_language_title') }}">
       {% for code in languages %}
@@ -28,6 +29,15 @@
       {% endfor %}
     </select>
   </div>
+
+  <details {% if not filters.attrs.is_empty() %}open{% endif %}>
+    <summary>{{ t('filters.advanced_summary') }}</summary>
+    {% set filter_class = "filter" %}
+    {% set attrs = filters.attrs %}
+    {% include "partials/card_attribute_filters.html" %}
+  </details>
+
+  <input type="hidden" id="page-input" name="page" value="1">
 </form>
 
 <details id="manual-add">
@@ -196,5 +206,16 @@
     htmx.trigger(document.getElementById("filters"), "submit");
   });
 })();
+
+// Folear o fichário com as setas do teclado (pedido do usuário: "como um
+// fichário físico") — só reage quando a visão fichário está na tela
+// (`.binder` só existe nesse parcial) e o foco não está num campo de texto,
+// senão roubaria a seta de quem está digitando num filtro.
+document.addEventListener("keydown", (event) => {
+  if (!document.querySelector(".binder")) return;
+  if (["INPUT", "SELECT", "TEXTAREA"].includes(event.target.tagName)) return;
+  if (event.key === "ArrowLeft") document.getElementById("pagination-prev-btn")?.click();
+  if (event.key === "ArrowRight") document.getElementById("pagination-next-btn")?.click();
+});
 </script>
 {% endblock %}

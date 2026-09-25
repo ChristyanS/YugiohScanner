@@ -124,6 +124,13 @@ class ImageEvent:
     #: rendeu (plano §22). `0`/`1` é o caso de hoje — uma foto, uma carta.
     crop_index: int = 0
     crop_count: int = 1
+    #: Total de imagens descobertas nesta execução (`ScanRunReport.
+    #: total_images`) — igual em todo evento do mesmo scan. Presente aqui (e
+    #: não só no evento final `"done"`) para a barra de progresso da Web
+    #: saber "quantas faltam" desde a primeira imagem processada, em vez de
+    #: ficar indeterminada o scan inteiro (achado real do usuário: bulk scan
+    #: longo sem noção de quanto falta).
+    total: int = 0
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -143,6 +150,7 @@ class ImageEvent:
             "error": self.error,
             "crop_index": self.crop_index,
             "crop_count": self.crop_count,
+            "total": self.total,
         }
 
 
@@ -211,6 +219,12 @@ class ScanRunReport:
 
 
 ProgressCallback = Callable[[ImageEvent], None]
+#: Chamado quando nenhuma foto termina dentro de `heartbeat_interval`, com os
+#: caminhos ainda em processamento (ver docstring de
+#: `scanner/pipeline.py::run_pipeline`) — uma foto de grade processa todas as
+#: células numa `Future` só, então sem isto o consumidor (Web) fica sem
+#: nenhum sinal enquanto uma grade lenta ainda está rodando.
+HeartbeatCallback = Callable[[list[Path]], None]
 
 
 class ScanService:
@@ -262,6 +276,7 @@ class ScanService:
         require_set: bool | None = None,
         require_rarity: bool | None = None,
         progress: ProgressCallback | None = None,
+        on_heartbeat: HeartbeatCallback | None = None,
     ) -> ScanRunReport:
         started = time.perf_counter()
         # Informar `grid_size` ("--grid-size 3x3") já liga o modo grade
@@ -301,6 +316,7 @@ class ScanService:
                 no_auto=no_auto,
                 reprocess=reprocess,
                 progress=progress,
+                on_heartbeat=on_heartbeat,
                 grid=effective_grid,
                 grid_size=grid_size,
                 require_set=require_set,
@@ -635,6 +651,7 @@ class ScanService:
         no_auto: bool,
         reprocess: bool,
         progress: ProgressCallback | None,
+        on_heartbeat: HeartbeatCallback | None = None,
         grid: bool = False,
         grid_size: tuple[int, int] | None = None,
         require_set: bool | None = None,
@@ -651,7 +668,12 @@ class ScanService:
             already_known = image.file_hash in known_hashes
             if already_known and not reprocess:
                 report.skipped += 1
-                event = ImageEvent(file_name=image.path.name, status="skipped", skipped=True)
+                event = ImageEvent(
+                    file_name=image.path.name,
+                    status="skipped",
+                    skipped=True,
+                    total=report.total_images,
+                )
                 report.events.append(event)
                 if progress is not None:
                     progress(event)
@@ -692,6 +714,7 @@ class ScanService:
             workers=workers,
             grid_mode=grid,
             grid_size=grid_size,
+            on_heartbeat=on_heartbeat,
         )
 
         job_id = job.id if job is not None else None
@@ -799,6 +822,7 @@ class ScanService:
                     file_name=outcome.path.name,
                     status=outcome.preprocess_status,
                     error=outcome.preprocess_error,
+                    total=report.total_images,
                 )
             ]
 
@@ -857,6 +881,7 @@ class ScanService:
                 error=crop.error,
                 crop_index=crop.region.index,
                 crop_count=crop.region.count,
+                total=report.total_images,
             )
 
         match_result = engine.match(
@@ -965,6 +990,7 @@ class ScanService:
             applied=applied,
             crop_index=crop.region.index,
             crop_count=crop.region.count,
+            total=report.total_images,
         )
 
     def _apply_decision(

@@ -12,6 +12,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse
 
 from ...db.tables import DECK_BANLISTS, DECK_BUILD_MODES
+from ..deps import CatalogServiceDep
 
 router = APIRouter()
 
@@ -27,10 +28,12 @@ def decks_page(request: Request) -> HTMLResponse:
 
 
 @router.get("/decks/{deck_id}", response_class=HTMLResponse)
-def deck_editor_page(deck_id: int, request: Request) -> HTMLResponse:
+def deck_editor_page(deck_id: int, request: Request, catalog: CatalogServiceDep) -> HTMLResponse:
     templates = request.app.state.templates
     return templates.TemplateResponse(
         request,
         "deck_editor.html",
-        {"deck_id": deck_id},
+        # Opções dos `<select>` de Tipo/Atributo/Race do painel de filtros
+        # avançados da busca (mesmo painel de `/cards`/`/collection`).
+        {"deck_id": deck_id, "filter_options": catalog.filter_options()},
     )

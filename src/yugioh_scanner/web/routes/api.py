@@ -8,7 +8,7 @@ import uuid
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, BackgroundTasks, File, Query, UploadFile
+from fastapi import APIRouter, BackgroundTasks, File, Query, Request, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
@@ -20,7 +20,9 @@ from ...errors import InvalidScanPathError, TooManyUploadFilesError, UploadTooLa
 from ...images import ImageError, has_supported_extension, load_image, looks_like_image
 from ...images.grid import parse_grid_size
 from ...scanner.discovery import resolve_scan_folder
+from ...services.catalog_service import resolve_display_language
 from ...services.sync_service import SyncService
+from ..card_filter_params import parse_card_attribute_filters
 from ..deps import (
     CatalogServiceDep,
     ClientDep,
@@ -101,12 +103,23 @@ def start_sync(
 @router.get("/cards")
 def search_cards(
     catalog: CatalogServiceDep,
+    settings: SettingsServiceDep,
     q: str | None = None,
     set: str | None = None,
+    lang: str | None = None,
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
 ) -> list[dict[str, Any]]:
-    cards = catalog.search_cards(q, set_prefix=set, limit=limit, offset=offset)
+    # `lang` resolvido do mesmo jeito que `/cards`/`/collection` (idioma
+    # explícito > preferência salva > derivado da UI) — sem isto, a busca
+    # de nome multilíngue (via `CardAttributeFilters`/`lang` em
+    # `CardRepository._matching_ids`) ficava travada em inglês para quem
+    # chama este endpoint sem passar `lang` (ex.: a busca de "adicionar
+    # manualmente" em `/collection`), mesmo com a coleção toda em
+    # português (achado real: regressão ao restringir a busca por idioma
+    # — ver `CollectionRepository.list_filtered`).
+    resolved_lang = resolve_display_language(lang, default=settings.get_default_card_language())
+    cards = catalog.search_cards(q, set_prefix=set, lang=resolved_lang, limit=limit, offset=offset)
     return [card_to_dict(card) for card in cards]
 
 
@@ -469,7 +482,13 @@ class DeckCardBody(BaseModel):
 
 @router.get("/decks")
 def list_decks(decks: DeckServiceDep) -> list[dict[str, Any]]:
-    return [deck_to_dict(d) for d in decks.list_decks()]
+    # Inclui as cartas de cada deck (mesma assinatura de `get_deck`) para a
+    # galeria calcular a capa sem N chamadas extras quando `cover_card_id`
+    # não foi definido — mesmo fallback já usado em `deck_editor.html`
+    # (`cover_card_id` ou a primeira carta do deck).
+    return [
+        deck_to_dict(d, cards=decks.repo.cards_for_deck(d.id)) for d in decks.list_decks()
+    ]
 
 
 @router.post("/decks")
@@ -510,13 +529,19 @@ def clear_decks(decks: DeckServiceDep) -> dict[str, int]:
 @router.get("/decks/{deck_id}/search")
 def search_deck_pool(
     deck_id: int,
+    request: Request,
     decks: DeckServiceDep,
+    settings: SettingsServiceDep,
     q: str | None = None,
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
 ) -> list[dict[str, Any]]:
     deck = decks.get_deck(deck_id)
-    cards = decks.searchable_pool(deck, q, limit=limit, offset=offset)
+    filters = parse_card_attribute_filters(request.query_params)
+    lang = resolve_display_language(
+        request.query_params.get("lang"), default=settings.get_default_card_language()
+    )
+    cards = decks.searchable_pool(deck, q, filters=filters, lang=lang, limit=limit, offset=offset)
     payload = [card_to_dict(c) for c in cards]
     if deck.build_mode == "collection_only":
         # Selo "cópias restantes" (plano do Deck Builder §5) — só faz sentido

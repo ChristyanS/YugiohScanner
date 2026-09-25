@@ -1,0 +1,21 @@
+{#
+  Visão fichário do Banco de Dados (pedido do usuário) — mesma grade 3x3 de
+  `collection_binder.html`, mas sem quantidade (o catálogo inteiro, não só o
+  que o usuário possui) e sem `total`/`total_pages` na página: quem inclui
+  este parcial (`database_results.html`) já mostra a contagem/nav acima.
+#}
+<div class="binder">
+  <div class="binder-page">
+    <div class="binder-grid">
+      {% for card in cards %}
+      {% set display_name = display_names.get(card.id, card.name) %}
+      <a class="binder-pocket" href="/cards/{{ card.id }}?lang={{ filters.lang }}" title="{{ display_name }}">
+        <img src="/api/v1/cards/{{ card.id }}/image?size=small" loading="lazy" alt="{{ display_name }}">
+      </a>
+      {% endfor %}
+      {% for _ in range(9 - cards|length) %}
+      <div class="binder-pocket binder-pocket-empty" aria-hidden="true"></div>
+      {% endfor %}
+    </div>
+  </div>
+</div>

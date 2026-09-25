@@ -44,9 +44,15 @@
 .badge-unmatched, .badge-rejected { background: color-mix(in srgb, var(--pico-del-color) 20%, transparent); }
 .badge-confirmed { background: color-mix(in srgb, var(--pico-ins-color) 20%, transparent); }
 
+/* `height: 68px` fixo dava proporção 48:68 (~0.706), diferente da
+   proporção real de uma carta física (59:86, ~0.686) que `.gallery-thumb
+   img`/`.photo-wrap.thumb` já usam — a miniatura da tabela cropava a
+   lateral da carta enquanto a mesma carta na visão em galeria aparecia
+   inteira (achado real do usuário). `aspect-ratio` mantém a largura fixa e
+   deriva a altura certa. */
 .thumb {
   width: 48px;
-  height: 68px;
+  aspect-ratio: 59 / 86;
   object-fit: cover;
   border-radius: 4px;
   background: var(--pico-card-sectioning-background-color);
@@ -78,6 +84,15 @@
   padding: 0.15rem 0.6rem;
   margin-inline-start: 0.5rem;
   font-size: 0.85rem;
+}
+
+/* Par min/até de um filtro numérico (ATK/DEF/Estrelas/Escala/Link — painel
+   de filtros avançados, `partials/card_attribute_filters.html`) lado a
+   lado dentro da mesma célula do `.grid` do form, em vez de cada `<input>`
+   número virar uma coluna própria do grid do Pico. */
+.filter-range {
+  display: flex;
+  gap: 0.35rem;
 }
 
 .review-grid {
@@ -355,6 +370,12 @@ progress { width: 100%; }
 .gallery-thumb {
   position: relative;
   width: 100%;
+  /* Base para quando não há `<img>` (deck novo sem capa nem carta ainda,
+     `decks.html`) — sem isto o contêiner colapsa para altura zero em vez de
+     mostrar uma caixa vazia do tamanho certo. */
+  aspect-ratio: 59 / 86;
+  border-radius: 6px;
+  background: var(--pico-card-sectioning-background-color);
 }
 
 .gallery-thumb img {
@@ -392,10 +413,116 @@ progress { width: 100%; }
   line-height: 1.2;
 }
 
+/* Galeria de decks (`/decks`): mesma grade/miniatura de
+   `.gallery-item`/`.gallery-thumb`, mas o item não pode ser um `<a>`
+   sozinho — tem um botão de excluir abaixo do nome, e `<button>` dentro de
+   `<a>` é HTML inválido. O link (imagem + nome) fica num `<a>` interno, que
+   herda o reset de cor/sublinhado que `.gallery-item` normalmente aplica
+   direto no `<a>`. */
+.deck-gallery-item a {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  color: inherit;
+  text-decoration: none;
+}
+
+.deck-gallery-item button {
+  margin-block-start: 0.35rem;
+  width: auto;
+  padding: 0.15rem 0.6rem;
+  font-size: 0.75rem;
+}
+
 .pagination {
   display: flex;
+  align-items: center;
   justify-content: space-between;
   margin-block: 1rem;
+}
+
+/* Mesmo problema/solução de `.qty-btn`: sem isto o `<button>` de bloco
+   100% do Pico empurra o indicador de página para a linha de baixo em vez
+   de ficar lado a lado no `<nav class="pagination">`. */
+.pagination-btn {
+  display: inline-block;
+  width: auto;
+  padding: 0.35rem 0.9rem;
+}
+
+.pagination-indicator {
+  color: var(--pico-muted-color);
+  font-size: 0.9rem;
+}
+
+/* Visão fichário (pedido do usuário: Coleção e Banco de Dados) — grade fixa
+   3x3, uma "folha" por página; `collection_binder.html`/`database_binder.html`
+   preenchem `.binder-grid` em ordem de documento, então o `grid-auto-flow`
+   padrão (linha a linha) já entrega "linha 1 = posições 1-3, linha 2 = 4-6,
+   linha 3 = 7-9" sem precisar calcular índice nenhum aqui. */
+.binder-page {
+  background: var(--pico-card-sectioning-background-color);
+  border: 1px solid var(--pico-muted-border-color);
+  border-radius: var(--pico-border-radius);
+  padding: 1rem;
+  /* Reforça a sensação de "virar a folha" a cada troca de página — o
+     parcial inteiro é substituído pelo swap do HTMX, então a animação
+     reinicia sozinha a cada `.binder-page` novo inserido no DOM. */
+  animation: binder-flip 0.3s ease;
+}
+
+@keyframes binder-flip {
+  from {
+    opacity: 0;
+    transform: perspective(900px) rotateY(6deg);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.binder-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1rem;
+}
+
+.binder-pocket {
+  position: relative;
+  display: block;
+  aspect-ratio: 59 / 86;
+  border-radius: 6px;
+  background: var(--pico-card-sectioning-background-color);
+  border: 1px solid var(--pico-muted-border-color);
+  overflow: hidden;
+}
+
+.binder-pocket img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+/* Bolso vazio no fim da última folha (menos de 9 cartas na página) — traço
+   pontilhado no lugar do miolo cheio, para manter a grade 3x3 completa em
+   vez de encolher/realinhar as células preenchidas. */
+.binder-pocket-empty {
+  border-style: dashed;
+  background: transparent;
+}
+
+.binder-qty {
+  position: absolute;
+  top: 0.25rem;
+  right: 0.25rem;
+  background: var(--pico-primary);
+  color: var(--pico-primary-inverse);
+  border-radius: 999px;
+  padding: 0.1rem 0.55rem;
+  font-size: 0.75rem;
+  font-weight: 700;
 }
 
 .lang-switch {

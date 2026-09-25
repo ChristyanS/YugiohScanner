@@ -1,4 +1,6 @@
-{% if filters.view == "gallery" %}
+{% if filters.view == "binder" %}
+{% include "partials/collection_binder.html" %}
+{% elif filters.view == "gallery" %}
 {% include "partials/collection_gallery.html" %}
 {% else %}
 {% include "partials/collection_rows.html" %}

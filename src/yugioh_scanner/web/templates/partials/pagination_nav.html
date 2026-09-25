@@ -1,0 +1,27 @@
+{#
+  Navegação de paginação compartilhada por `database_results.html` (lista/
+  galeria/fichário) e pelos parciais de fichário (`collection_binder.html`,
+  `database_binder.html`). Em vez de montar a URL da página seguinte à mão
+  (o que exigiria serializar os ~14 campos do painel de filtros avançados,
+  `partials/card_attribute_filters.html`), reaproveita o próprio `<form>` de
+  filtros: escreve a página alvo no `#page-input` escondido dentro dele e
+  dispara `submit` via htmx — o mesmo truque que `collection.html` já usa
+  para recarregar a listagem após adicionar um item manualmente. Assim a
+  navegação nunca perde um filtro ativo, e o form permanece a única fonte de
+  verdade da query string.
+
+  Espera `filters` (com `.page`) e `total_pages` no contexto.
+#}
+{% if total_pages and total_pages > 1 %}
+<nav class="pagination">
+  <button type="button" id="pagination-prev-btn" class="pagination-btn" {% if filters.page <= 1 %}disabled{% endif %}
+          onclick="var p=document.getElementById('page-input'); p.value='{{ filters.page - 1 }}'; htmx.trigger(p.form, 'submit');">
+    &larr; {{ t('database.previous') }}
+  </button>
+  <span class="pagination-indicator">{{ t('common.page_of', page=filters.page, total_pages=total_pages) }}</span>
+  <button type="button" id="pagination-next-btn" class="pagination-btn" {% if filters.page >= total_pages %}disabled{% endif %}
+          onclick="var p=document.getElementById('page-input'); p.value='{{ filters.page + 1 }}'; htmx.trigger(p.form, 'submit');">
+    {{ t('database.next') }} &rarr;
+  </button>
+</nav>
+{% endif %}

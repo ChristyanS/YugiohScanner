@@ -101,6 +101,16 @@ class ScanRunnerRegistry:
                 raise _ScanCancelledError
             loop.call_soon_threadsafe(run.queue.put_nowait, {"type": "image", **event.as_dict()})
 
+        def on_heartbeat(pending_paths: list[Path]) -> None:
+            # Uma foto de grade lenta (várias cartas numa `Future` só, ver
+            # `scanner/pipeline.py::run_pipeline`) fica sem nenhum evento
+            # `on_event` até processar todas as células — este pulso avisa o
+            # cliente que o scan continua vivo em vez de parecer travado.
+            loop.call_soon_threadsafe(
+                run.queue.put_nowait,
+                {"type": "heartbeat", "files": [path.name for path in pending_paths]},
+            )
+
         def target() -> None:
             payload: dict[str, Any]
             try:
@@ -117,6 +127,7 @@ class ScanRunnerRegistry:
                     require_set=require_set,
                     require_rarity=require_rarity,
                     progress=on_event,
+                    on_heartbeat=on_heartbeat,
                 )
                 run.report = report
                 payload = {"type": "done", **report.as_dict()}
