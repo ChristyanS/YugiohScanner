@@ -1,0 +1,59 @@
+name: Build desktop .exe
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "packaging/**"
+      - "migrations/**"
+      - "alembic.ini"
+      - "pyproject.toml"
+      - ".github/workflows/build-exe.yml"
+  workflow_dispatch: {}
+
+concurrency:
+  group: build-exe
+  cancel-in-progress: true
+
+permissions:
+  contents: write # necessario para publicar/atualizar o Release
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Instalar dependencias (web, ocr, dev, build)
+        run: pip install -e ".[web,ocr,dev,build]"
+
+      - name: Rodar suite de testes
+        run: pytest
+
+      - name: Gerar o .exe
+        run: pyinstaller packaging/yugioh_scanner_web.spec --noconfirm
+
+      - name: Publicar artifact do workflow
+        uses: actions/upload-artifact@v4
+        with:
+          name: YugiohScanner-windows-exe
+          path: dist/YugiohScanner.exe
+          if-no-files-found: error
+
+      - name: Publicar/atualizar release "build-latest"
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete build-latest --yes --cleanup-tag || true
+          gh release create build-latest dist/YugiohScanner.exe \
+            --title "Build automatico ($(git rev-parse --short HEAD))" \
+            --notes "Gerado automaticamente pelo GitHub Actions a partir do commit ${{ github.sha }}." \
+            --prerelease \
+            --target "${{ github.sha }}"

@@ -302,8 +302,17 @@ e usar: um `.exe` único que sobe a interface Web e abre o navegador sozinho.
 Não precisa de Python instalado na máquina que só vai *rodar* o `.exe` — só
 para *gerar* ele.
 
-Gerar o `.exe` (precisa do venv de desenvolvimento com as dependências
-`[web,ocr]` já instaladas):
+**Build automática:** todo push para `main` que mexa em código/empacotamento
+(`src/`, `packaging/`, `migrations/`, `alembic.ini`, `pyproject.toml`), e
+também sob demanda (aba **Actions** → *Build desktop .exe* → **Run
+workflow**), gera o `.exe` via GitHub Actions
+(`.github/workflows/build-exe.yml`) e publica o resultado na aba
+**Releases** do repositório (tag `build-latest`, sempre com o build mais
+recente) — não precisa gerar localmente para experimentar. A receita manual
+abaixo continua valendo para quem quer buildar do próprio código.
+
+Gerar o `.exe` localmente (precisa do venv de desenvolvimento com as
+dependências `[web,ocr]` já instaladas):
 
 ```powershell
 pip install -e ".[build]"
