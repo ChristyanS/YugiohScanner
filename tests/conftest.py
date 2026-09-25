@@ -8,9 +8,25 @@ diverge da migração deixa de ser possível.
 
 from __future__ import annotations
 
+import os
 import shutil
 from collections.abc import Iterator
 from pathlib import Path
+
+# `COLUMNS`/`LINES` fixos ANTES de qualquer import de `yugioh_scanner` —
+# `cli/render.py` cria `Console`/`error_console` como singleton de módulo, e
+# o Rich resolve a largura desse singleton na primeira leitura e a mantém
+# pelo resto do processo (achado real: falha só em CI, nunca localmente —
+# o runner do GitHub Actions no Windows não tem um terminal de verdade
+# associado ao processo, então `shutil.get_terminal_size()`/`COLUMNS`
+# ambiente resolvem para uma largura minúscula, e `--help`/mensagens de erro
+# saem quebrados a ponto de um texto como "--code" nunca aparecer inteiro
+# numa linha só). Setar aqui, antes de qualquer `Console` existir, garante
+# uma largura previsível em qualquer ambiente (CI ou terminal local) —
+# sobrescreve de propósito (não `setdefault`): o valor que já vinha do
+# ambiente é justamente a causa do bug, herdar ele não resolveria nada.
+os.environ["COLUMNS"] = "200"
+os.environ["LINES"] = "50"
 
 import pytest
 from sqlalchemy import Engine
